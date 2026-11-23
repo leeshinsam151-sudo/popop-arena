@@ -18,6 +18,13 @@ export const CORNER_ASSIST = 0.65; // 모서리 보정: 옆 길까지 이 거리
 
 export const SOFT_DENSITY = 0.45;
 export const ITEM_CHANCE = 0.32;
+/** 아이템 등장 비율 (ItemType 순서: 폭탄, 화력, 속도, 축구화, 글러브) */
+export const ITEM_WEIGHTS = [30, 30, 16, 12, 12];
+
+export const KICK_SPEED = 8; // ⚽ 찬 폭탄이 미끄러지는 속도 (칸/초)
+export const THROW_DIST = 3; // 🧤 던지는 거리 (칸)
+export const THROW_TICKS = 8; // 3칸 비행 시간 (0.4초)
+export const THROW_BOUNCE_TICKS = 2; // 착지 칸이 막혀 한 칸 더 갈 때마다 추가 비행 시간
 
 export enum Tile {
   Floor = 0,
@@ -45,6 +52,8 @@ export enum ItemType {
   Bomb = 0,
   Fire = 1,
   Speed = 2,
+  Kick = 3, // ⚽ 축구화
+  Glove = 4, // 🧤 글러브
 }
 
 // 캐릭터 6종 (디자인 시안과 동일한 색)

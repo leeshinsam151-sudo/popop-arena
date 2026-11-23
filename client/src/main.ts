@@ -75,6 +75,8 @@ let pending: { s: number; d: Dir }[] = [];
 let seq = 0;
 let shake = 0;
 let lastFlames = 0;
+let hadKick = false;
+let hadGlove = false;
 
 interface Avatar { model: CharacterModel; char: number; name: string; last: { x: number; y: number }; dead: boolean; label: THREE.Sprite }
 const avatars = new Map<string, Avatar>();
@@ -289,6 +291,22 @@ function render(now: number, dt: number, alpha: number) {
       if (p.id === myId && p.alive) focus = { x, y };
     }
     for (const id of [...avatars.keys()]) if (!ids.has(id)) removeAvatar(id);
+
+    // 폭탄: 다른 플레이어와 같은 시점으로 보간 (차여서 미끄러짐, 던져져서 포물선 비행)
+    for (const bl of latest.bombs) {
+      const bb = b.s.bombs.find((q) => q.id === bl.id) ?? bl;
+      const ba = a.s.bombs.find((q) => q.id === bl.id) ?? bb;
+      if (bb.fly > 0 || ba.fly > 0) {
+        const fly = ba.fly > 0 && bb.fly > 0 ? lerp(ba.fly, bb.fly, k) : (bb.fly > 0 ? bb.fly : 0);
+        const f = bb.fly > 0 ? bb : ba;
+        const prog = f.flyTotal ? 1 - fly / f.flyTotal : 1;
+        arena.poseBomb(bl.id, lerp(f.sx, f.x, prog), lerp(f.sy, f.y, prog), 4 * 1.6 * prog * (1 - prog), prog * Math.PI * 2);
+      } else {
+        const x = lerp(ba.fx, bb.fx, k), y = lerp(ba.fy, bb.fy, k);
+        const rolled = (x - bl.x) + (y - bl.y);
+        arena.poseBomb(bl.id, x, y, 0, bb.slide ? rolled * 3 : 0);
+      }
+    }
   } else {
     for (const av of avatars.values()) av.model.animate(t, dt, false);
   }
@@ -449,7 +467,16 @@ function updateHud(s: Snap) {
   const me = s.players.find((p) => p.id === myId);
   const stats = $('mystats');
   stats.classList.toggle('hidden', !me);
-  if (me) stats.textContent = me.alive ? `💣 ${me.bombMax}   🔥 ${me.range}   👟 ${me.speedLv + 1}` : '👻 관전 중';
+  if (me) {
+    stats.textContent = me.alive
+      ? `💣 ${me.bombMax}   🔥 ${me.range}   👟 ${me.speedLv + 1}${me.kick ? '   ⚽' : ''}${me.glove ? '   🧤' : ''}`
+      : '👻 관전 중';
+    // 특수 아이템을 처음 얻으면 사용법 안내
+    if (me.kick && !hadKick) toast('⚽ 축구화! 폭탄 쪽으로 걸어가면 뻥 차요');
+    if (me.glove && !hadGlove) toast('🧤 글러브! 폭탄 위에서 Space를 한 번 더 누르면 던져요');
+  }
+  hadKick = !!me?.kick;
+  hadGlove = !!me?.glove;
 }
 
 let toastTimer = 0;

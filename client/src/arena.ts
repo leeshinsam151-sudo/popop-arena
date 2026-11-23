@@ -238,16 +238,30 @@ export class Arena {
     }
   }
 
+  /** 폭탄 생성·제거만 담당. 위치는 매 프레임 poseBomb으로 (보간된 값) */
   syncBombs(list: Bomb[]) {
     const seen = new Set<number>();
     for (const b of list) {
       seen.add(b.id);
       let g = this.bombs.get(b.id);
-      if (!g) { g = makeBomb(); this.group.add(g); this.bombs.set(b.id, g); }
-      g.position.set(b.x, 0, b.y);
+      if (!g) {
+        g = makeBomb();
+        g.position.set(b.fx, 0, b.fy);
+        this.group.add(g);
+        this.bombs.set(b.id, g);
+      }
       g.userData.fuse = b.fuse;
     }
     for (const [id, g] of this.bombs) if (!seen.has(id)) { this.group.remove(g); this.bombs.delete(id); }
+  }
+
+  /** x, z: 칸 좌표, height: 던져져 날아가는 높이, spin: 굴러가는/날아가는 회전 */
+  poseBomb(id: number, x: number, z: number, height: number, spin: number) {
+    const g = this.bombs.get(id);
+    if (!g) return;
+    g.position.set(x, height, z);
+    g.userData.airborne = height > 0.01;
+    (g.userData.body as THREE.Object3D).rotation.set(spin, 0, 0);
   }
 
   syncFlames(list: Flame[]) { this.flames = list; }
@@ -279,7 +293,7 @@ export class Arena {
     for (const g of this.bombs.values()) {
       const fuse = g.userData.fuse as number;
       const speed = 6 + (50 - fuse) * 0.35;
-      const k = 1 + Math.sin(t * speed) * 0.06;
+      const k = g.userData.airborne ? 1 : 1 + Math.sin(t * speed) * 0.06;
       g.scale.set(k, 2 - k, k);
       (g.userData.spark as THREE.Mesh).scale.setScalar(0.05 + Math.random() * 0.04);
     }
@@ -325,15 +339,22 @@ const fuseGeo = new THREE.TubeGeometry(new THREE.CatmullRomCurve3([
 
 function makeBomb() {
   const g = new THREE.Group();
+  // body: 회전 중심을 폭탄 중심(0.34)에 둔 그룹 → 구르거나 날아갈 때 제자리에서 회전
+  const body = new THREE.Group();
+  body.position.y = 0.34;
+  g.add(body);
   const add = (geo: THREE.BufferGeometry, mat: THREE.Material, p: number[], s: number[]) => {
     const mm = new THREE.Mesh(geo, mat);
-    mm.position.set(p[0], p[1], p[2]); mm.scale.set(s[0], s[1], s[2]); mm.castShadow = true; g.add(mm); return mm;
+    mm.position.set(p[0], p[1] - 0.34, p[2]); mm.scale.set(s[0], s[1], s[2]); mm.castShadow = true; body.add(mm); return mm;
   };
   add(G.sph, bombMats.body, [0, 0.34, 0], [0.33, 0.33, 0.33]);
   add(G.cyl, bombMats.cap, [0, 0.66, 0], [0.11, 0.08, 0.11]);
   add(G.sph, bombMats.shine, [-0.12, 0.47, 0.22], [0.07, 0.05, 0.03]);
-  g.add(new THREE.Mesh(fuseGeo, bombMats.fuse));
+  const fuse = new THREE.Mesh(fuseGeo, bombMats.fuse);
+  fuse.position.y = -0.34;
+  body.add(fuse);
   g.userData.spark = add(G.sph, bombMats.spark, [0.15, 0.83, 0], [0.06, 0.06, 0.06]);
+  g.userData.body = body;
   return g;
 }
 
@@ -341,6 +362,8 @@ const ITEM_STYLE: Record<ItemType, number> = {
   [ItemType.Bomb]: 0x5b6bff,
   [ItemType.Fire]: 0xff6a2a,
   [ItemType.Speed]: 0x2fd1a0,
+  [ItemType.Kick]: 0x2e9e4f,
+  [ItemType.Glove]: 0xb04ad8,
 };
 function makeItem(type: ItemType) {
   const g = new THREE.Group();
@@ -355,6 +378,36 @@ function makeItem(type: ItemType) {
   } else if (type === ItemType.Fire) {
     const c = new THREE.Mesh(G.cone, new THREE.MeshBasicMaterial({ color: 0xff7a1a })); c.scale.set(0.18, 0.4, 0.18); icon.add(c);
     const c2 = new THREE.Mesh(G.cone, new THREE.MeshBasicMaterial({ color: 0xffe066 })); c2.scale.set(0.1, 0.25, 0.1); c2.position.set(0, -0.05, 0.06); icon.add(c2);
+  } else if (type === ItemType.Kick) {
+    // ⚽ 축구화: 신발 + 축구공
+    const shoe = new THREE.Group();
+    shoe.position.x = -0.08;
+    icon.add(shoe);
+    const red = new THREE.MeshStandardMaterial({ color: 0xff4b3e, roughness: 0.4 });
+    const sole = new THREE.Mesh(G.box, new THREE.MeshStandardMaterial({ color: 0xffffff }));
+    sole.scale.set(0.34, 0.05, 0.16); sole.position.y = -0.12; shoe.add(sole);
+    const toe = new THREE.Mesh(G.sph, red); toe.scale.set(0.17, 0.1, 0.09); toe.position.set(0.06, -0.06, 0); shoe.add(toe);
+    const ankle = new THREE.Mesh(G.cyl, red); ankle.scale.set(0.085, 0.18, 0.08); ankle.position.set(-0.09, 0.0, 0); shoe.add(ankle);
+    for (let i = 0; i < 3; i++) {
+      const stud = new THREE.Mesh(G.box, bombMats.body); stud.scale.set(0.03, 0.04, 0.03); stud.position.set(-0.12 + i * 0.11, -0.16, 0); shoe.add(stud);
+    }
+    const ball = new THREE.Mesh(G.sph, new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 }));
+    ball.scale.setScalar(0.11); ball.position.set(0.2, -0.04, 0.06); icon.add(ball);
+    for (const [a, b, c] of [[0.2, 0.06, 0.1], [0.29, -0.04, 0.08], [0.2, -0.08, 0.16]]) {
+      const spot = new THREE.Mesh(G.sph, bombMats.body); spot.scale.setScalar(0.035); spot.position.set(a, b, c); icon.add(spot);
+    }
+  } else if (type === ItemType.Glove) {
+    // 🧤 글러브: 손바닥 + 손가락 4개 + 엄지 + 소매
+    const white = new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.6 });
+    const cuff = new THREE.MeshStandardMaterial({ color: 0xff4b3e, roughness: 0.5 });
+    const palm = new THREE.Mesh(G.sph, white); palm.scale.set(0.17, 0.15, 0.08); icon.add(palm);
+    for (let i = 0; i < 4; i++) {
+      const f = new THREE.Mesh(G.cyl, white);
+      f.scale.set(0.04, 0.14, 0.04); f.position.set(-0.11 + i * 0.075, 0.17, 0); f.rotation.z = (1.5 - i) * 0.08;
+      icon.add(f);
+    }
+    const thumb = new THREE.Mesh(G.cyl, white); thumb.scale.set(0.045, 0.12, 0.045); thumb.position.set(0.17, 0.02, 0); thumb.rotation.z = -0.9; icon.add(thumb);
+    const band = new THREE.Mesh(G.cyl, cuff); band.scale.set(0.14, 0.07, 0.08); band.position.y = -0.17; icon.add(band);
   } else {
     const c = new THREE.Mesh(G.cone, new THREE.MeshBasicMaterial({ color: 0x7ff0d0 }));
     c.scale.set(0.16, 0.32, 0.16); c.rotation.z = -Math.PI / 2; icon.add(c);

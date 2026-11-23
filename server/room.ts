@@ -2,7 +2,7 @@ import type { WebSocket } from 'ws';
 import { CHARACTERS, DT, Dir, END_TICKS, MAX_PLAYERS, ROUND_TICKS } from '../shared/constants.ts';
 import { MAP_IDS, type MapId } from '../shared/maps.ts';
 import type { ClientMsg, MetaPlayer, Phase, ServerMsg } from '../shared/protocol.ts';
-import { createGame, movePlayer, placeBomb, stepWorld, updatePassers, type GameState } from '../shared/sim.ts';
+import { bombAction, createGame, movePlayer, stepWorld, updatePassers, type GameState } from '../shared/sim.ts';
 
 const MAX_CLIENTS = 12; // 플레이어 6 + 관전자
 const MAX_QUEUE = 8;
@@ -109,6 +109,7 @@ export class Room {
       c.bombPressed = c.lastB; // 라운드 전에 누른 폭탄은 무시
     }
     this.state = createGame(this.mapId, players.map((c) => c.id), Math.random);
+    if (process.env.DEV_ITEMS === '1') devItems(this.state);
     this.timeLeft = ROUND_TICKS;
     this.phase = 'playing';
     this.result = undefined;
@@ -137,7 +138,7 @@ export class Room {
         for (let i = 0; i < n; i++) {
           const inp = c.inputs.shift()!;
           c.ack = inp.s;
-          if (inp.b > c.bombPressed) { c.bombPressed = inp.b; placeBomb(s, p); }
+          if (inp.b > c.bombPressed) { c.bombPressed = inp.b; bombAction(s, p); }
           movePlayer(s, p, inp.d, DT);
         }
       }
@@ -187,5 +188,16 @@ export class Room {
 
   private send(c: Client, msg: ServerMsg) {
     if (c.ws.readyState === 1) c.ws.send(JSON.stringify(msg));
+  }
+}
+
+/** 개발·테스트용 (DEV_ITEMS=1): 시작부터 축구화·글러브 지급, 첫 스폰 오른쪽에 아이템 5종 배치 */
+function devItems(s: GameState) {
+  for (const p of s.players) { p.kick = true; p.glove = true; }
+  for (let i = 0; i < 5; i++) {
+    const x = 3 + i, y = 1;
+    s.tiles[y * s.w + x] = 0;
+    s.items.push({ x, y: y + 2, type: i });
+    s.tiles[(y + 2) * s.w + x] = s.tiles[(y + 2) * s.w + x] === 1 ? 1 : 0;
   }
 }
