@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { ItemType, Tile } from '../../shared/constants.ts';
 import { MAP_ROWS, type MapId } from '../../shared/maps.ts';
-import type { Bomb, Flame, Item } from '../../shared/sim.ts';
+import { lavaCracks, lavaState, type Bomb, type Flame, type Item } from '../../shared/sim.ts';
 
 interface Theme {
   fa: number; fb: number; sky: number;
@@ -42,6 +42,7 @@ const G = {
   sph: new THREE.SphereGeometry(1, 18, 12),
   cyl: new THREE.CylinderGeometry(1, 1, 1, 14),
   cone: new THREE.ConeGeometry(1, 1, 14),
+  hemi: new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2),
   leaf: new THREE.ConeGeometry(1, 1, 4),
   torus: new THREE.TorusGeometry(1, 0.08, 8, 32),
 };
@@ -78,6 +79,17 @@ export class Arena {
   private tiles = '';
   private lavaMat = new THREE.MeshStandardMaterial({ color: 0xff6a1f, emissive: 0xff3a00, emissiveIntensity: 1, roughness: 0.4 });
   private spinners: THREE.Object3D[] = [];
+  /** 🌋 용암 균열: 서버 틱에 맞춰 경고 빛·분출 기둥 */
+  private lavaFx: { off: number; mat: THREE.MeshStandardMaterial; col: THREE.Mesh }[] = [];
+  /** 🍄 버섯 갓 (누가 점프하면 눌렸다 튀어 오름) */
+  private mushrooms = new Map<string, { cap: THREE.Object3D; squash: number }>();
+  private frozenIce!: THREE.InstancedMesh;
+  private frozenCore!: THREE.InstancedMesh;
+  private crackBits!: THREE.InstancedMesh;
+  private iceDebrisMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.85 });
+  private tick = 0;
+  private fogBase: [number, number] = [30, 60];
+  private fogColor = new THREE.Color();
   private bombs = new Map<number, THREE.Group>();
   /** 서버 확인 전에 먼저 그려 둔 폭탄 (키 누른 즉시 반응용) */
   private ghosts = new Map<string, { g: THREE.Group; until: number }>();
@@ -107,6 +119,8 @@ export class Arena {
     this.clearDynamic();
     this.statics.clear();
     this.spinners = [];
+    this.lavaFx = [];
+    this.mushrooms.clear();
     this.mapId = mapId;
     this.tiles = '';
     const rows = MAP_ROWS[mapId];
@@ -114,6 +128,8 @@ export class Arena {
     this.h = rows.length; this.w = rows[0].length;
     this.scene.background = new THREE.Color(th.sky);
     this.scene.fog = new THREE.Fog(th.sky, 30, 60);
+    this.fogBase = [30, 60];
+    this.fogColor.set(th.sky);
 
     const B = new Batcher();
     const wallMat = new THREE.MeshStandardMaterial(th.wall);
@@ -143,10 +159,21 @@ export class Arena {
         case 'I':
           B.add(G.box, m('streak', { color: 0xffffff, transparent: true, opacity: 0.7 }), x, 0.005, y, 0.5, 0.01, 0.05, 0.7, 0, false);
           break;
-        case 'L':
-          B.add(G.box, m('crack', { color: 0xff5a1f, emissive: 0xff3300, emissiveIntensity: 1.2 }), x, 0.005, y, 0.75, 0.02, 0.07, 0.5, 0, false);
-          B.add(G.box, m('crack', {}), x, 0.006, y, 0.5, 0.02, 0.06, -0.9, 0, false);
+        case 'L': {
+          // 균열마다 재질을 따로 둬서 분출 시점에 맞춰 개별로 빛나게 함
+          const cm = new THREE.MeshStandardMaterial({ color: 0xff5a1f, emissive: 0xff3300, emissiveIntensity: 0.6 });
+          for (const [len, wid, rot] of [[0.75, 0.07, 0.5], [0.5, 0.06, -0.9], [0.35, 0.05, 1.6]]) {
+            const c = new THREE.Mesh(G.box, cm);
+            c.position.set(x, 0.006, y); c.scale.set(len, 0.02, wid); c.rotation.y = rot;
+            this.statics.add(c);
+          }
+          const col = new THREE.Mesh(G.cone, new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
+          col.position.set(x, 0.8, y); col.rotation.x = Math.PI; col.visible = false;
+          this.statics.add(col);
+          const off = lavaCracks(mapId).find(([lx, ly]) => lx === x && ly === y)?.[2] ?? 0;
+          this.lavaFx.push({ off, mat: cm, col });
           break;
+        }
         case 'Q': this.spinRing(x, y, 0.32, m('qRing', { color: 0xa6803f })); break;
         case 'A': case 'B': case 'C': {
           const c = { A: 0x2ff0d0, B: 0xb06bff, C: 0xff5fa2 }[ch];
@@ -158,10 +185,20 @@ export class Arena {
           for (const [a, b, c, r, k] of [[0, 0.3, 0, 0.36, 1], [-0.22, 0.24, 0.14, 0.26, 2], [0.22, 0.25, -0.12, 0.28, 2], [0.06, 0.5, 0.04, 0.24, 1]])
             B.add(G.sph, m('bush' + k, { color: k === 1 ? 0x2f7d3a : 0x3f9a4a, transparent: true, opacity: 0.88 }), x + a, b, y + c, r, r * 0.9, r);
           break;
-        case 'M':
+        case 'M': {
           B.add(G.cyl, m('stem', { color: 0xfff3e0 }), x, 0.17, y, 0.1, 0.34, 0.1);
-          B.add(G.sph, m('cap', { color: 0xe8413a, roughness: 0.5 }), x, 0.32, y, 0.36, 0.22, 0.36);
+          const cap = new THREE.Group();
+          cap.position.set(x, 0.3, y);
+          const top = new THREE.Mesh(G.hemi, m('cap', { color: 0xe8413a, roughness: 0.5 }));
+          top.scale.set(0.38, 0.26, 0.38); top.castShadow = true; cap.add(top);
+          for (const [a, b, c] of [[0.15, 0.17, 0.12], [-0.16, 0.16, 0.08], [0, 0.24, -0.14], [-0.02, 0.26, 0.06]]) {
+            const dot = new THREE.Mesh(G.sph, m('dot', { color: 0xffffff }));
+            dot.position.set(a, b, c); dot.scale.set(0.055, 0.035, 0.055); cap.add(dot);
+          }
+          this.statics.add(cap);
+          this.mushrooms.set(`${x},${y}`, { cap, squash: 0 });
           break;
+        }
         case 'T':
           B.add(G.cyl, m('trunk', { color: 0x7a4f2a }), x, 0.6, y, 0.24, 1.2, 0.24);
           B.add(G.sph, m('canopy', { color: 0x2c7a3a }), x, 1.65, y, 0.85, 0.7, 0.85);
@@ -195,6 +232,11 @@ export class Arena {
     this.softBand = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ roughness: 0.8, ...th.band }), n);
     for (const im of [this.softBody, this.softBand]) { im.count = 0; im.castShadow = true; im.receiveShadow = true; this.statics.add(im); }
     this.debrisMat.color.set(th.soft);
+    // 🧊 언 상자(얼음 + 안의 상자), 금 간 상자(상자 + 얼음 조각)
+    this.frozenIce = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ color: 0x8fd3f5, transparent: true, opacity: 0.62, roughness: 0.05 }), n);
+    this.frozenCore = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ color: 0xc08a50, roughness: 0.8 }), n);
+    this.crackBits = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ color: 0xd8f1ff, transparent: true, opacity: 0.8, roughness: 0.1 }), n * 3);
+    for (const im of [this.frozenIce, this.frozenCore, this.crackBits]) { im.count = 0; im.castShadow = true; im.receiveShadow = true; this.statics.add(im); }
   }
 
   private spinRing(x: number, y: number, r: number, mat: THREE.Material, h = 0.01) {
@@ -209,32 +251,64 @@ export class Arena {
     if (tiles === this.tiles) return;
     const prev = this.tiles;
     this.tiles = tiles;
-    let i = 0, broken = 0;
+    let i = 0, fi = 0, ci = 0, cb = 0, broken = 0;
+    const put = (im: THREE.InstancedMesh, k: number, x: number, y: number, z: number, sx: number, sy: number, sz: number, ry = 0) => {
+      dummy.rotation.set(0, ry, 0); dummy.position.set(x, y, z); dummy.scale.set(sx, sy, sz); dummy.updateMatrix();
+      im.setMatrixAt(k, dummy.matrix);
+    };
     for (let idx = 0; idx < tiles.length; idx++) {
       const x = idx % this.w, y = Math.floor(idx / this.w);
-      if (Number(tiles[idx]) === Tile.Soft) {
-        dummy.rotation.set(0, 0, 0);
-        dummy.position.set(x, 0.4, y); dummy.scale.set(0.84, 0.8, 0.84); dummy.updateMatrix();
-        this.softBody.setMatrixAt(i, dummy.matrix);
-        dummy.position.set(x, 0.55, y); dummy.scale.set(0.86, 0.08, 0.86); dummy.updateMatrix();
-        this.softBand.setMatrixAt(i, dummy.matrix);
+      const t = Number(tiles[idx]);
+      const was = prev ? Number(prev[idx]) : -1;
+      if (t === Tile.Soft) {
+        put(this.softBody, i, x, 0.4, y, 0.84, 0.8, 0.84);
+        put(this.softBand, i, x, 0.55, y, 0.86, 0.08, 0.86);
         i++;
-      } else if (prev && Number(prev[idx]) === Tile.Soft) {
-        this.spawnDebris(x, y);
-        broken++;
+      } else if (t === Tile.Frozen) {
+        put(this.frozenIce, fi++, x, 0.42, y, 0.88, 0.84, 0.88);
+        put(this.frozenCore, ci++, x, 0.34, y, 0.46, 0.46, 0.46, 0.5);
+      } else if (t === Tile.Cracked) {
+        put(this.frozenCore, ci++, x, 0.36, y, 0.7, 0.72, 0.7, 0.2);
+        for (let k = 0; k < 3; k++) put(this.crackBits, cb++, x + [-0.3, 0.28, 0.05][k], 0.2 + k * 0.22, y + [0.3, -0.25, 0.33][k], 0.22, 0.18, 0.2, k);
+      }
+      if (prev && was !== t) {
+        if (was === Tile.Frozen) this.spawnDebris(x, y, this.iceDebrisMat); // 얼음만 깨짐
+        else if (was === Tile.Soft || was === Tile.Cracked) { this.spawnDebris(x, y, this.debrisMat); broken++; }
       }
     }
     this.softBody.count = this.softBand.count = i;
-    this.softBody.instanceMatrix.needsUpdate = this.softBand.instanceMatrix.needsUpdate = true;
+    this.frozenIce.count = fi; this.frozenCore.count = ci; this.crackBits.count = cb;
     // 화면 밖 판정(frustum culling)에 쓰는 범위를 다시 계산. 안 하면 상자 0개일 때 계산된
     // 빈 범위가 남아서, 상자가 화면 안에 있어도 통째로 그려지지 않는다.
-    for (const im of [this.softBody, this.softBand]) { im.computeBoundingSphere(); im.computeBoundingBox(); }
+    for (const im of [this.softBody, this.softBand, this.frozenIce, this.frozenCore, this.crackBits]) {
+      im.instanceMatrix.needsUpdate = true;
+      im.computeBoundingSphere(); im.computeBoundingBox();
+    }
     if (broken && this.onBreak) this.onBreak(broken);
   }
 
-  private spawnDebris(x: number, y: number) {
+  /** 서버 틱(소수 가능): 용암 균열 경고·분출 연출 기준 */
+  setTick(tick: number) { this.tick = tick; }
+
+  /** 🍄 누가 버섯을 밟고 뛰면 갓이 눌렸다 튀어 오름 */
+  bounceMushroom(x: number, y: number) {
+    const m = this.mushrooms.get(`${x},${y}`);
+    if (m) m.squash = 1;
+  }
+
+  /** 🌪️ 모래폭풍 세기 0~1: 안개가 가까이 와서 멀리가 안 보임 */
+  setSandstorm(k: number) {
+    const fog = this.scene.fog as THREE.Fog | null;
+    if (!fog) return;
+    fog.near = this.fogBase[0] + (7 - this.fogBase[0]) * k;
+    fog.far = this.fogBase[1] + (17 - this.fogBase[1]) * k;
+    fog.color.copy(this.fogColor).lerp(new THREE.Color(0xd9b27a), k);
+    (this.scene.background as THREE.Color | null)?.copy(fog.color);
+  }
+
+  private spawnDebris(x: number, y: number, mat: THREE.Material) {
     for (let k = 0; k < 6; k++) {
-      const mm = new THREE.Mesh(G.box, this.debrisMat);
+      const mm = new THREE.Mesh(G.box, mat);
       mm.scale.setScalar(0.12 + Math.random() * 0.1);
       mm.position.set(x + (Math.random() - 0.5) * 0.5, 0.4, y + (Math.random() - 0.5) * 0.5);
       mm.castShadow = true;
@@ -309,6 +383,27 @@ export class Arena {
   }
 
   update(t: number, dt: number) {
+    // 🌋 용암 균열: 경고 중엔 점점 밝아지고, 분출 중엔 불기둥
+    const tk = Math.floor(this.tick);
+    for (const fx of this.lavaFx) {
+      const st = lavaState(tk, fx.off);
+      if (st === 2) {
+        fx.mat.emissiveIntensity = 3;
+        fx.col.visible = true;
+        const p = 0.85 + Math.sin(t * 30 + fx.off) * 0.15;
+        fx.col.scale.set(0.34 * p, 1.7, 0.34 * p);
+        fx.col.position.y = 0.85;
+      } else {
+        fx.col.visible = false;
+        fx.mat.emissiveIntensity = st >= 0 ? 0.6 + st * st * 3 * (0.75 + Math.random() * 0.5) : 0.6;
+      }
+    }
+    for (const m of this.mushrooms.values()) {
+      if (m.squash <= 0) continue;
+      m.squash = Math.max(0, m.squash - dt * 3);
+      const k = Math.sin(m.squash * Math.PI * 2) * m.squash;
+      m.cap.scale.set(1 + k * 0.3, 1 - k * 0.45, 1 + k * 0.3);
+    }
     this.lavaMat.emissiveIntensity = 0.9 + Math.sin(t * 2) * 0.35;
     for (const s of this.spinners) s.rotation.z += dt;
     for (const g of this.bombs.values()) {

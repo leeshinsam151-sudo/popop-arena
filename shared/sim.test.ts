@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DT, Dir, FUSE_TICKS, Tile } from './constants.ts';
-import { bombAction, createGame, movePlayer, placeBomb, stepWorld, throwBomb, updatePassers, type GameState } from './sim.ts';
+import { DT, Dir, FUSE_TICKS, JUMP_TIME, Tile } from './constants.ts';
+import { bombAction, createGame, lavaCracks, lavaState, movePlayer, placeBomb, stepWorld, throwBomb, updatePassers, type GameState, type PlayerState } from './sim.ts';
 
 const noRand = () => 0.99; // 랜덤 블록 없음, 아이템 없음
 
@@ -124,4 +124,90 @@ test('🧤 글러브: 벽 너머로 던지고, 착지 칸이 막혀 있으면 �
   throwBomb(s, p);
   assert.equal(s.bombs[0].y, 5);
   assert.equal(s.bombs[0].x, 1);
+});
+
+// ---------- 맵 기믹 ----------
+const mapGame = (mapId: 'glacier' | 'volcano' | 'forest' | 'desert') => createGame(mapId, ['p0', 'p1'], noRand);
+const press = (s: GameState, p: PlayerState, dir: Dir, ticks: number) => {
+  for (let i = 0; i < ticks; i++) { movePlayer(s, p, dir, DT); updatePassers(s); }
+};
+
+test('🧊 얼음: 손을 떼도 미끄러져서 더 가고, 일반 바닥에서는 바로 멈춘다', () => {
+  const s = mapGame('glacier');
+  const ice = s.players[0], floor = s.players[1];
+  ice.x = 5; ice.y = 5; // (5,5)~ 얼음 호수
+  floor.x = 2; floor.y = 1; // 1번 줄 일반 바닥
+  press(s, ice, Dir.Right, 4); press(s, floor, Dir.Right, 4);
+  const iceAtRelease = ice.x, floorAtRelease = floor.x;
+  press(s, ice, Dir.None, 20); press(s, floor, Dir.None, 20);
+  assert.equal(floor.x, floorAtRelease, 'floor: stops immediately');
+  assert.ok(ice.x - iceAtRelease > 0.8, `ice slid ${(ice.x - iceAtRelease).toFixed(2)} tiles`);
+  assert.equal(ice.mom, 0, 'eventually stops');
+});
+
+test('🧊 언 상자: 두 번 맞아야 깨지고, 깨지면 아이템이 반드시 나온다', () => {
+  const s = mapGame('glacier');
+  const p = s.players[0];
+  const idx = 3 * s.w + 5; // (5,3) 언 상자
+  assert.equal(s.tiles[idx], Tile.Frozen);
+  p.x = 5; p.y = 5; placeBomb(s, p); p.x = 1; p.y = 1;
+  run(s, FUSE_TICKS + 12);
+  assert.equal(s.tiles[idx], Tile.Cracked, 'first hit cracks');
+  assert.equal(s.items.length, 0);
+  p.x = 5; p.y = 5; placeBomb(s, p); p.x = 1; p.y = 1;
+  run(s, FUSE_TICKS + 12);
+  assert.equal(s.tiles[idx], Tile.Floor, 'second hit breaks');
+  assert.ok(s.items.some((it) => it.x === 5 && it.y === 3), 'guaranteed item');
+});
+
+test('🏜️ 유사: 위에 있으면 이동 속도가 60%', () => {
+  const s = mapGame('desert');
+  const p = s.players[0];
+  p.x = 4; p.y = 7; // 유사
+  press(s, p, Dir.Right, 1);
+  assert.ok(Math.abs(p.x - (4 + 3.4 * 0.6 * DT)) < 1e-9);
+});
+
+test('🍄 버섯: 누르는 방향으로 2칸 점프해서 사이의 블록을 넘고, 공중에서는 불길에 안 맞는다', () => {
+  const s = mapGame('forest');
+  const p = s.players[0];
+  s.tiles[4 * s.w + 3] = Tile.Soft; // (3,4) 막음
+  p.x = 3; p.y = 5; // (3,5) 버섯
+  press(s, p, Dir.Up, 1);
+  assert.ok(p.jump, 'launched');
+  s.flames.push({ x: 3, y: 4, ttl: 30 }, { x: 3, y: 5, ttl: 30 });
+  stepWorld(s, noRand);
+  assert.ok(p.alive, 'immune in the air');
+  s.flames = [];
+  press(s, p, Dir.None, Math.ceil(JUMP_TIME / DT) + 1);
+  assert.equal(p.jump, null);
+  assert.deepEqual([p.x, p.y], [3, 3], 'landed 2 cells up');
+});
+
+test('🌀 워프: 석판 한가운데에 서면 짝 석판으로 이동하고, 벗어나기 전엔 다시 안 탄다', () => {
+  const s = mapGame('desert');
+  const p = s.players[0];
+  p.x = 2; p.y = 3; // A 석판 (3,3) 왼쪽
+  for (let i = 0; i < 10 && p.y !== 11; i++) press(s, p, Dir.Right, 1);
+  assert.deepEqual([p.x, p.y], [15, 11], 'warped to the other A');
+  press(s, p, Dir.None, 10);
+  assert.deepEqual([p.x, p.y], [15, 11], 'no bounce back while standing on it');
+  press(s, p, Dir.Left, 8); // 석판에서 벗어났다가
+  assert.ok(p.x < 14.5);
+  for (let i = 0; i < 12 && p.y !== 3; i++) press(s, p, Dir.Right, 1); // 다시 올라서면
+  assert.deepEqual([p.x, p.y], [3, 3], 'can warp again after leaving');
+});
+
+test('🌋 용암 균열: 주기적으로 분출하고, 분출 중 위에 있으면 죽는다', () => {
+  const s = mapGame('volcano');
+  const p = s.players[0];
+  const [x, y, off] = lavaCracks('volcano')[0];
+  p.x = x; p.y = y;
+  let erupted = false;
+  for (let i = 0; i < 80 && p.alive; i++) {
+    stepWorld(s, noRand);
+    if (lavaState(s.tick, off) === 2) erupted = true;
+  }
+  assert.ok(erupted);
+  assert.equal(p.alive, false);
 });

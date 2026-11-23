@@ -113,6 +113,9 @@ export class Room {
     if (this.pick === 'random') this.mapId = MAP_IDS[Math.floor(Math.random() * MAP_IDS.length)];
     this.state = createGame(this.mapId, players.map((c) => c.id), Math.random);
     if (process.env.DEV_ITEMS === '1') devItems(this.state);
+    if (process.env.DEV_CLEAR === '1') { // 개발·테스트용: 부서지는 블록 없이 시작 (기믹 확인용)
+      this.state.tiles = this.state.tiles.map((t) => (t === 2 ? 0 : t));
+    }
     this.timeLeft = ROUND_TICKS;
     this.phase = 'playing';
     this.result = undefined;

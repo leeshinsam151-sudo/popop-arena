@@ -109,7 +109,10 @@ kbd { font-family: inherit; padding: 1px 6px; border-radius: 6px; background: rg
 }
 @keyframes pop { from { transform: translate(-50%, -50%) scale(0.6); opacity: 0; } }
 #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--panel); padding: 10px 18px; border-radius: 999px; }
-#ping { position: fixed; left: 12px; bottom: 10px; font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--panel); color: var(--muted); pointer-events: none; }
+#corner { position: fixed; left: 12px; bottom: 10px; display: flex; gap: 6px; align-items: center; z-index: 5; }
+#corner button { width: 34px; height: 34px; border-radius: 50%; background: var(--panel); font-size: 16px; display: grid; place-items: center; }
+#corner button.off { opacity: 0.45; text-decoration: line-through; }
+#ping { font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--panel); color: var(--muted); pointer-events: none; }
 #ping:empty { display: none; }
 #ping.good { color: #6be38a; } #ping.ok { color: #ffd166; } #ping.bad { color: #ff6a5a; }
 #status { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); background: #b3261e; padding: 10px 18px; border-radius: 12px; display: flex; gap: 10px; align-items: center; }

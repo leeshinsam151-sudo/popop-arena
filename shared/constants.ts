@@ -31,7 +31,20 @@ export enum Tile {
   Wall = 1,
   Soft = 2,
   Pit = 3, // 용암 강: 걸어서 못 건너지만 불길은 통과
+  Frozen = 4, // 🧊 언 상자: 한 번 맞으면 금이 감
+  Cracked = 5, // 🧊 금 간 상자: 한 번 더 맞으면 깨지고 아이템이 반드시 나옴
 }
+
+// ---------- 맵 기믹 ----------
+export const ICE_DECEL = 4.5; // 🧊 얼음 위에서 손을 떼면 이 감속도(칸/초²)로 미끄러지다 멈춤 → 약 1칸 더 감
+export const QUICKSAND_MUL = 0.6; // 🏜️ 유사 위 이동 속도 배율
+export const LAVA_CYCLE = 80; // 🌋 용암 균열 주기 4초 (틱)
+export const LAVA_WARN = 32; // 분출 전 경고 1.6초
+export const LAVA_ERUPT = 16; // 분출 0.8초 (불길과 똑같이 위험)
+export const JUMP_TIME = 0.5; // 🍄 버섯 점프 체공 시간(초)
+export const JUMP_DIST = 2; // 버섯 점프 거리(칸)
+export const SANDSTORM_PERIOD = 45 * TICK_RATE; // 🌪️ 모래폭풍 주기 (연출만)
+export const SANDSTORM_TICKS = 8 * TICK_RATE;
 
 export enum Dir {
   None = 0,

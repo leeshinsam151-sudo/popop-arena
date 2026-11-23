@@ -1,9 +1,10 @@
 // 게임 시뮬레이션. 서버는 이 코드로 게임을 진행하고,
 // 클라이언트는 같은 movePlayer로 내 캐릭터 이동을 미리 예측한다.
+// 맵 기믹(얼음·유사·버섯·워프·용암 균열·언 상자)도 모두 여기서 판정한다.
 import {
-  BASE_SPEED, CORNER_ASSIST, DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, ITEM_CHANCE, ITEM_WEIGHTS,
-  ItemType, KICK_SPEED, MAX_BOMBS, MAX_RANGE, MAX_SPEED_LV, SOFT_DENSITY, SPEED_STEP,
-  THROW_BOUNCE_TICKS, THROW_DIST, THROW_TICKS, Tile, DT,
+  BASE_SPEED, CORNER_ASSIST, DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, ICE_DECEL, ITEM_CHANCE, ITEM_WEIGHTS,
+  ItemType, JUMP_DIST, JUMP_TIME, KICK_SPEED, LAVA_CYCLE, LAVA_ERUPT, LAVA_WARN, MAX_BOMBS, MAX_RANGE,
+  MAX_SPEED_LV, QUICKSAND_MUL, SOFT_DENSITY, SPEED_STEP, THROW_BOUNCE_TICKS, THROW_DIST, THROW_TICKS, Tile, DT,
 } from './constants.ts';
 import { MAP_ROWS, type MapId } from './maps.ts';
 
@@ -19,7 +20,11 @@ export interface PlayerState {
   kick: boolean; // ⚽ 축구화: 폭탄 쪽으로 걸으면 참
   glove: boolean; // 🧤 글러브: 폭탄 위에서 폭탄 키를 다시 누르면 던짐
   facing: Dir;
+  mom: number; // 🧊 얼음 위 관성 속도 (손을 떼도 이 속도로 미끄러짐)
+  jump: Jump | null; // 🍄 버섯 점프 중이면 경로
+  warpLock: boolean; // 🌀 워프 직후: 워프 칸을 벗어나야 다시 탈 수 있음
 }
+export interface Jump { t: number; total: number; sx: number; sy: number; tx: number; ty: number }
 export interface Bomb {
   id: number;
   x: number; // 논리 칸 (막힘·폭발 판정 기준). 날아가는 중이면 착지할 칸
@@ -36,7 +41,7 @@ export interface Bomb {
   sx: number; // 던진 위치 (날아가는 연출용)
   sy: number;
 }
-export interface Flame { x: number; y: number; ttl: number }
+export interface Flame { x: number; y: number; ttl: number; lava?: boolean }
 export interface Item { x: number; y: number; type: ItemType }
 
 export interface GameState {
@@ -62,7 +67,7 @@ export function tileFromChar(ch: string, rand: () => number): Tile {
   switch (ch) {
     case '#': case 'T': case 'O': return Tile.Wall;
     case '~': return Tile.Pit;
-    case 'F': return Tile.Soft;
+    case 'F': return Tile.Frozen;
     case '.': return rand() < SOFT_DENSITY ? Tile.Soft : Tile.Floor;
     default: return Tile.Floor;
   }
@@ -78,11 +83,49 @@ export function createGame(mapId: MapId, playerIds: string[], rand: () => number
     id, slot,
     x: spawns[slot][0], y: spawns[slot][1],
     alive: true, bombMax: 1, range: 2, speedLv: 0, kick: false, glove: false, facing: Dir.Down,
+    mom: 0, jump: null, warpLock: false,
   }));
   return { mapId, w, h, tiles, players, bombs: [], flames: [], items: [], tick: 0, nextBombId: 1 };
 }
 
 export const playerSpeed = (p: PlayerState) => BASE_SPEED + p.speedLv * SPEED_STEP;
+
+/** 맵 원본 문자 (기믹 판정용: I 얼음, Q 유사, M 버섯, A/B/C 워프, L 용암 균열, G 덤불) */
+export const featureAt = (mapId: MapId, x: number, y: number): string => MAP_ROWS[mapId][y]?.[x] ?? '#';
+
+const warpCache = new Map<string, [number, number]>();
+/** 🌀 같은 글자 워프 석판의 짝 */
+export function warpPartner(mapId: MapId, x: number, y: number): [number, number] | null {
+  const key = `${mapId}:${x},${y}`;
+  if (warpCache.has(key)) return warpCache.get(key)!;
+  const ch = featureAt(mapId, x, y);
+  const rows = MAP_ROWS[mapId];
+  for (let yy = 0; yy < rows.length; yy++) for (let xx = 0; xx < rows[yy].length; xx++) {
+    if (rows[yy][xx] === ch && (xx !== x || yy !== y)) { warpCache.set(key, [xx, yy]); return [xx, yy]; }
+  }
+  return null;
+}
+
+const lavaCache = new Map<MapId, [number, number, number][]>();
+/** 🌋 용암 균열 칸과 각자의 분출 시점 오프셋 */
+export function lavaCracks(mapId: MapId): [number, number, number][] {
+  let list = lavaCache.get(mapId);
+  if (!list) {
+    list = [];
+    MAP_ROWS[mapId].forEach((row, y) => [...row].forEach((ch, x) => {
+      if (ch === 'L') list!.push([x, y, (x * 11 + y * 7) % LAVA_CYCLE]);
+    }));
+    lavaCache.set(mapId, list);
+  }
+  return list;
+}
+/** 0~1: 경고 진행도(분출 전), 2: 분출 중, -1: 잠잠 */
+export function lavaState(tick: number, offset: number): number {
+  const ph = (tick + offset) % LAVA_CYCLE;
+  if (ph < LAVA_WARN) return ph / LAVA_WARN;
+  if (ph < LAVA_WARN + LAVA_ERUPT) return 2;
+  return -1;
+}
 
 const groundBombAt = (s: GameState, x: number, y: number) =>
   s.bombs.find((b) => b.fly === 0 && b.x === x && b.y === y);
@@ -108,14 +151,12 @@ function bombCellBlocked(s: GameState, x: number, y: number, self: Bomb | null, 
   return false;
 }
 
-/** 한 틱 이동. 길 중앙에 맞춰 정렬하고, 모서리에 살짝 걸리면 옆 길로 미끄러뜨린다. 축구화가 있으면 앞 폭탄을 찬다. */
-export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): void {
-  if (!p.alive || dir === Dir.None) return;
-  p.facing = dir;
-  let dist = playerSpeed(p) * dt;
+/** 진행 방향으로 dist만큼 이동. 길 중앙 정렬, 모서리 보정, 축구화 차기 포함. 실제로 움직인 거리 반환 */
+function moveCore(s: GameState, p: PlayerState, dir: Dir, dist: number): number {
   const [dx, dy] = DIR_VEC[dir];
   const horiz = dx !== 0;
   const d = horiz ? dx : dy;
+  const x0 = p.x, y0 = p.y;
   let m = horiz ? p.x : p.y; // 진행 축
   let q = horiz ? p.y : p.x; // 수직 축
   const free = (mm: number, qq: number) =>
@@ -156,6 +197,77 @@ export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): 
   }
 
   if (horiz) { p.x = m; p.y = q; } else { p.y = m; p.x = q; }
+  return Math.abs(p.x - x0) + Math.abs(p.y - y0);
+}
+
+/**
+ * 한 틱 이동 (서버 판정과 클라이언트 예측이 같은 코드 사용).
+ * 기믹: 🧊 얼음 관성, 🏜️ 유사 감속, 🍄 버섯 점프, 🌀 워프
+ */
+export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): void {
+  if (!p.alive) return;
+
+  // 🍄 점프 중: 입력 무시, 정해진 포물선 경로를 따라감
+  if (p.jump) {
+    const j = p.jump;
+    j.t = Math.min(j.total, j.t + dt);
+    const k = j.t / j.total;
+    p.x = j.sx + (j.tx - j.sx) * k;
+    p.y = j.sy + (j.ty - j.sy) * k;
+    if (j.t >= j.total) { p.x = j.tx; p.y = j.ty; p.jump = null; }
+    return;
+  }
+
+  const cx = Math.round(p.x), cy = Math.round(p.y);
+  const here = featureAt(s.mapId, cx, cy);
+  const onIce = here === 'I';
+
+  if (dir === Dir.None) {
+    // 🧊 얼음 위에서 손을 떼면 바라보던 방향으로 미끄러지며 감속
+    if (onIce && p.mom > 0) {
+      const moved = moveCore(s, p, p.facing, p.mom * dt);
+      p.mom = moved < 1e-6 ? 0 : Math.max(0, p.mom - ICE_DECEL * dt);
+    } else {
+      p.mom = 0;
+    }
+  } else {
+    p.facing = dir;
+    const speed = playerSpeed(p) * (here === 'Q' ? QUICKSAND_MUL : 1);
+    const moved = moveCore(s, p, dir, speed * dt);
+    p.mom = onIce && moved > 1e-6 ? speed : 0;
+  }
+
+  triggerFeatures(s, p, dir);
+}
+
+/** 이동 후 발밑 기믹 발동: 🍄 버섯 점프, 🌀 워프 */
+function triggerFeatures(s: GameState, p: PlayerState, dir: Dir) {
+  const cx = Math.round(p.x), cy = Math.round(p.y);
+  const here = featureAt(s.mapId, cx, cy);
+  const nearCenter = Math.abs(p.x - cx) < 0.3 && Math.abs(p.y - cy) < 0.3;
+
+  // 🍄 버섯: 누르고 있는 방향으로 2칸 점프 (사이에 있는 벽·블록·폭탄은 넘어감). 착지 칸이 막혀 있으면 안 뜀
+  if (here === 'M' && dir !== Dir.None && nearCenter) {
+    const [dx, dy] = DIR_VEC[dir];
+    const tx = cx + dx * JUMP_DIST, ty = cy + dy * JUMP_DIST;
+    if (!isBlocked(s, tx, ty, p.id) && !groundBombAt(s, tx, ty)) {
+      p.jump = { t: 0, total: JUMP_TIME, sx: p.x, sy: p.y, tx, ty };
+      p.mom = 0;
+      return;
+    }
+  }
+
+  // 🌀 워프: 석판 한가운데에 서면 같은 글자 석판으로 순간이동. 석판을 벗어나야 다시 탈 수 있음
+  const isWarp = here === 'A' || here === 'B' || here === 'C';
+  if (!isWarp) { p.warpLock = false; return; }
+  if (!p.warpLock && nearCenter) {
+    const to = warpPartner(s.mapId, cx, cy);
+    if (to && !isBlocked(s, to[0], to[1], p.id)) {
+      p.x = to[0]; p.y = to[1];
+      p.mom = 0;
+      p.warpLock = true;
+    }
+  }
 }
 
 /** 폭탄에서 완전히 빠져나간 플레이어는 더 이상 그 폭탄을 통과할 수 없다. */
@@ -274,6 +386,13 @@ export function stepWorld(s: GameState, rand: () => number): void {
     if (f) f.ttl = FLAME_TICKS; else s.flames.push({ x, y, ttl: FLAME_TICKS });
   };
 
+  // 🌋 용암 균열 분출: 분출 중인 칸은 불길과 똑같이 위험 (폭탄도 터뜨림)
+  for (const [x, y, off] of lavaCracks(s.mapId)) {
+    if (lavaState(s.tick, off) !== 2) continue;
+    const f = s.flames.find((ff) => ff.x === x && ff.y === y);
+    if (f) f.ttl = Math.max(f.ttl, 2); else s.flames.push({ x, y, ttl: 2, lava: true });
+  }
+
   const queue = s.bombs.filter((b) => b.fly === 0 && (b.fuse <= 0 || flameAt(b.x, b.y)));
   const exploded = new Set<number>();
   const broken = new Set<number>();
@@ -290,7 +409,7 @@ export function stepWorld(s: GameState, rand: () => number): void {
         const t = s.tiles[y * s.w + x];
         if (t === Tile.Wall) break;
         addFlame(x, y);
-        if (t === Tile.Soft) { broken.add(y * s.w + x); break; }
+        if (t === Tile.Soft || t === Tile.Frozen || t === Tile.Cracked) { broken.add(y * s.w + x); break; }
         const other = s.bombs.find((o) => o.fly === 0 && o.x === x && o.y === y && !exploded.has(o.id));
         if (other) { queue.push(other); break; }
         const itemIdx = s.items.findIndex((it) => it.x === x && it.y === y);
@@ -300,12 +419,15 @@ export function stepWorld(s: GameState, rand: () => number): void {
   }
   if (exploded.size) s.bombs = s.bombs.filter((b) => !exploded.has(b.id));
   for (const idx of broken) {
+    const t = s.tiles[idx];
+    if (t === Tile.Frozen) { s.tiles[idx] = Tile.Cracked; continue; } // 🧊 첫 번째: 금만 감
     s.tiles[idx] = Tile.Floor;
-    if (rand() < ITEM_CHANCE) s.items.push({ x: idx % s.w, y: Math.floor(idx / s.w), type: rollItem(rand) });
+    // 금 간 상자는 아이템이 반드시 나옴
+    if (t === Tile.Cracked || rand() < ITEM_CHANCE) s.items.push({ x: idx % s.w, y: Math.floor(idx / s.w), type: rollItem(rand) });
   }
 
   for (const p of s.players) {
-    if (!p.alive) continue;
+    if (!p.alive || p.jump) continue; // 🍄 점프 중에는 공중이라 불길에 안 맞음
     const cx = Math.round(p.x), cy = Math.round(p.y);
     if (flameAt(cx, cy)) { p.alive = false; continue; }
     const i = s.items.findIndex((it) => it.x === cx && it.y === cy);

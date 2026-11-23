@@ -1,14 +1,15 @@
 import * as THREE from 'three';
 import './style.css';
-import { CHARACTERS, DT, Dir, MAX_PLAYERS, TICK_RATE } from '../../shared/constants.ts';
+import { CHARACTERS, DT, Dir, MAX_PLAYERS, SANDSTORM_PERIOD, SANDSTORM_TICKS, TICK_RATE } from '../../shared/constants.ts';
 import { MAP_IDS, MAP_NAMES, type MapId } from '../../shared/maps.ts';
 import type { MetaPlayer, ServerMsg } from '../../shared/protocol.ts';
-import { spawnOrder, movePlayer, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
+import { featureAt, spawnOrder, movePlayer, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
 import { Arena } from './arena.ts';
 import { createCharacter, type CharacterModel } from './characters.ts';
 import { Input } from './input.ts';
 import { Net } from './net.ts';
 import { Studio, lobbyTiles } from './studio.ts';
+import { GameAudio, type Sfx } from './audio.ts';
 
 type Snap = Extract<ServerMsg, { t: 's' }>;
 type Meta = Extract<ServerMsg, { t: 'meta' }>;
@@ -63,6 +64,11 @@ resize();
 const arena = new Arena(scene);
 const input = new Input();
 const net = new Net();
+const audio = new GameAudio();
+audio.setMusic('lobby');
+// 브라우저는 사용자가 한 번 누르기 전까지 소리를 막으므로, 첫 입력 때 켬
+addEventListener('pointerdown', () => audio.unlock());
+addEventListener('keydown', () => audio.unlock());
 
 // ---------- 상태 ----------
 let myId = '';
@@ -162,6 +168,15 @@ function onMeta(m: Meta) {
   const prev = meta?.phase;
   meta = m;
   if (m.phase === 'playing' && prev !== 'playing') {
+    audio.play('start');
+    audio.setMusic(m.mapId);
+    lastSec = -1;
+  }
+  if (m.phase === 'ended' && prev === 'playing' && m.result) {
+    audio.play(m.result.winner === myId ? 'win' : 'lose');
+  }
+  if (m.phase === 'lobby') audio.setMusic('lobby');
+  if (m.phase === 'playing' && prev !== 'playing') {
     snaps.length = 0; pred = null; pending = []; lastFlames = 0;
     clearAvatars();
     arena.build(m.mapId);
@@ -196,6 +211,8 @@ function showLobbyScene() {
 function onSnap(s: Snap) {
   if (!meta) return;
   if (arena.mapId !== meta.mapId) arena.build(meta.mapId);
+  const prevSnap = snaps.at(-1)?.s;
+  if (prevSnap) snapEvents(prevSnap, s);
   snaps.push({ at: performance.now(), s });
   while (snaps.length > 40) snaps.shift();
   arena.setTiles(s.tiles);
@@ -241,15 +258,22 @@ function fixedStep() {
 }
 
 /** 내 캐릭터 화면 위치: 다음 입력 틱까지 기다리지 않고, 지금 누른 키로 남은 시간만큼 미리 움직여 본다 */
-function previewMe(alpha: number): { x: number; y: number } {
+function previewMe(alpha: number): { x: number; y: number; h: number } {
   const st = pred!.state, me = pred!.me;
-  const dir = input.dir;
-  if (dir === Dir.None || alpha <= 0 || !me.alive) return { x: me.x, y: me.y };
-  const ghost = { ...me };
+  if (alpha <= 0 || !me.alive) return { x: me.x, y: me.y, h: jumpHeight(me.jump) };
+  // 키를 안 눌러도 얼음 미끄러짐·점프는 계속 진행되므로 항상 미리 계산
+  const ghost = { ...me, jump: me.jump ? { ...me.jump } : null };
   const tmp: GameState = { ...st, players: [ghost], bombs: st.bombs.map((b) => ({ ...b })) };
-  movePlayer(tmp, ghost, dir, DT * alpha);
-  return { x: ghost.x, y: ghost.y };
+  movePlayer(tmp, ghost, input.dir, DT * alpha);
+  return { x: ghost.x, y: ghost.y, h: jumpHeight(ghost.jump) };
 }
+
+/** 🍄 점프 포물선 높이 */
+const jumpHeight = (j: { t: number; total: number } | null) => {
+  if (!j) return 0;
+  const k = j.t / j.total;
+  return 4 * 1.3 * k * (1 - k);
+};
 
 // 폭탄 키: 서버 응답을 기다리지 않고 폭탄을 먼저 그림 (서버 폭탄이 도착하면 교체)
 input.onBomb = () => {
@@ -260,7 +284,64 @@ input.onBomb = () => {
   if (onBomb) return; // 이미 폭탄 위 (글러브라면 던지기)
   if (st.bombs.filter((b) => b.owner === myId).length >= me.bombMax) return;
   arena.ghostBomb(cx, cy);
+  audio.play('place');
 };
+
+// ---------- 효과음: 스냅샷 변화로 사건 감지 ----------
+const listener = { x: 9, y: 7 }; // 소리를 듣는 위치 (카메라가 보는 곳)
+let lastSec = -1;
+function sfxAt(name: Sfx, x: number, y: number, base = 1) {
+  const d = Math.hypot(x - listener.x, y - listener.y);
+  const vol = base * Math.max(0.12, 1 - d / 13);
+  const pan = Math.max(-0.8, Math.min(0.8, (x - listener.x) / 7));
+  audio.play(name, vol, pan);
+}
+
+function snapEvents(prev: Snap, cur: Snap) {
+  // 폭탄: 새로 놓임(다른 사람), 차임, 던져짐, 착지, 폭발
+  const prevBombs = new Map(prev.bombs.map((b) => [b.id, b]));
+  const curIds = new Set(cur.bombs.map((b) => b.id));
+  for (const b of cur.bombs) {
+    const pb = prevBombs.get(b.id);
+    if (!pb) { if (b.fly > 0) sfxAt('throw', b.sx, b.sy); else if (b.owner !== myId) sfxAt('place', b.x, b.y, 0.8); continue; }
+    if (!pb.slide && b.slide) sfxAt('kick', b.fx, b.fy);
+    if (pb.fly === 0 && b.fly > 0) sfxAt('throw', b.sx, b.sy);
+    if (pb.fly > 0 && b.fly === 0) sfxAt('land', b.x, b.y);
+  }
+  let booms = 0;
+  for (const pb of prev.bombs) {
+    if (curIds.has(pb.id) || booms >= 3) continue;
+    sfxAt('explode', pb.x, pb.y, booms ? 0.6 : 1);
+    booms++;
+  }
+  // 🧊 언 상자에 금이 감
+  for (let i = 0; i < cur.tiles.length; i++) {
+    if (prev.tiles[i] === '4' && cur.tiles[i] === '5') { sfxAt('crack', i % arena.w, Math.floor(i / arena.w)); break; }
+  }
+  // 🌋 근처 용암 분출 시작
+  const prevLava = new Set(prev.flames.filter((f) => f.lava).map((f) => `${f.x},${f.y}`));
+  const nearLava = cur.flames.find((f) => f.lava && !prevLava.has(`${f.x},${f.y}`) && Math.hypot(f.x - listener.x, f.y - listener.y) < 4.5);
+  if (nearLava) sfxAt('lava', nearLava.x, nearLava.y, 0.55); // 가까운 균열만, 작게 (너무 자주 울리지 않도록)
+  // 플레이어: 사망, 🍄 점프, 🌀 워프, 아이템 획득
+  for (const p of cur.players) {
+    const pp = prev.players.find((q) => q.id === p.id);
+    if (!pp) continue;
+    if (pp.alive && !p.alive) sfxAt('death', p.x, p.y, p.id === myId ? 1.2 : 0.9);
+    if (!pp.jump && p.jump) {
+      arena.bounceMushroom(Math.round(p.jump.sx), Math.round(p.jump.sy));
+      sfxAt('boing', p.jump.sx, p.jump.sy);
+    }
+    if (p.alive && Math.hypot(p.x - pp.x, p.y - pp.y) > 1.5 && !p.jump && !pp.jump) sfxAt('warp', p.x, p.y);
+    if (p.id === myId) {
+      if ((p.kick && !pp.kick) || (p.glove && !pp.glove)) audio.play('power');
+      else if (p.bombMax > pp.bombMax || p.range > pp.range || p.speedLv > pp.speedLv) audio.play('pickup');
+    }
+  }
+  // 남은 10초 카운트다운
+  const sec = Math.ceil(cur.timeLeft / TICK_RATE);
+  if (meta?.phase === 'playing' && sec !== lastSec && sec <= 10 && sec > 0) audio.play('tick');
+  lastSec = sec;
+}
 
 // 핑: 1초마다 서버 왕복 시간 측정
 setInterval(() => { if (net.open) net.send({ t: 'ping', c: performance.now() }); }, 1000);
@@ -284,6 +365,21 @@ function frame(now: number) {
 }
 requestAnimationFrame(frame);
 
+/** 🌪️ 사막: 45초마다 8초 동안 모래폭풍으로 시야가 좁아짐 (연출만, 판정 영향 없음) */
+let storm = 0;
+let stormOn = false;
+function updateSandstorm(tick: number, dt: number) {
+  const active = tick >= 0 && meta?.mapId === 'desert' && meta.phase === 'playing'
+    && tick % SANDSTORM_PERIOD >= SANDSTORM_PERIOD - SANDSTORM_TICKS;
+  if (active && !stormOn) toast('🌪️ 모래폭풍! 잠시 시야가 좁아져요');
+  stormOn = active;
+  const target = active ? 1 : 0;
+  if (Math.abs(storm - target) < 0.001 && storm === target) return;
+  storm += (target - storm) * Math.min(1, dt * 1.5);
+  if (Math.abs(storm - target) < 0.01) storm = target;
+  if (meta?.mapId === 'desert') arena.setSandstorm(storm);
+}
+
 function render(now: number, dt: number, alpha: number) {
   const t = now / 1000;
   const latest = snaps.at(-1)?.s;
@@ -301,18 +397,28 @@ function render(now: number, dt: number, alpha: number) {
       ids.add(p.id);
       const mp = metaPlayer(p.id);
       const av = avatarFor(p.id, mp?.char ?? p.slot % CHARACTERS.length, mp?.name ?? '???');
-      let x: number, y: number;
+      let x: number, y: number, h = 0;
       if (p.id === myId && pred) {
         const pv = previewMe(alpha);
         const decay = Math.exp(-dt * 12);
         corr.x *= decay; corr.y *= decay;
         x = pv.x + corr.x;
         y = pv.y + corr.y;
+        h = pv.h;
       } else {
         const pa = a.s.players.find((q) => q.id === p.id) ?? p;
         const pb = b.s.players.find((q) => q.id === p.id) ?? p;
-        x = lerp(pa.x, pb.x, k);
-        y = lerp(pa.y, pb.y, k);
+        if (Math.hypot(pb.x - pa.x, pb.y - pa.y) > 1.5) {
+          x = pb.x; y = pb.y; // 🌀 워프: 맵을 가로질러 미끄러지지 않게 바로 이동
+        } else {
+          x = lerp(pa.x, pb.x, k);
+          y = lerp(pa.y, pb.y, k);
+        }
+        const ja = pa.jump, jb = pb.jump;
+        if (ja || jb) {
+          const jt = ja && jb ? lerp(ja.t, jb.t, k) : (jb ? jb.t * k : (ja!.total));
+          h = jumpHeight({ t: jt, total: (jb ?? ja)!.total });
+        }
       }
       const dx = x - av.last.x, dy = y - av.last.y;
       const moving = Math.hypot(dx, dy) > 0.002;
@@ -322,8 +428,12 @@ function render(now: number, dt: number, alpha: number) {
         diff = Math.atan2(Math.sin(diff), Math.cos(diff));
         av.model.root.rotation.y += diff * Math.min(1, dt * 18);
       }
-      av.model.root.position.set(x, 0, y);
+      av.model.root.position.set(x, h, y);
       av.last = { x, y };
+      // 🌲 덤불 속: 다른 사람에게는 거의 안 보이고 이름표도 숨김, 나는 반투명
+      const inBush = meta.mapId === 'forest' && featureAt(meta.mapId, Math.round(x), Math.round(y)) === 'G' && h === 0;
+      av.model.setOpacity(inBush ? (p.id === myId ? 0.5 : 0.12) : 1);
+      if (p.alive) av.label.visible = !inBush || p.id === myId;
       if (!p.alive && !av.dead) { av.dead = true; av.model.die(); av.label.visible = false; }
       av.model.animate(t, dt, moving && p.alive);
       if (p.id === myId && p.alive) focus = { x, y };
@@ -368,6 +478,17 @@ function render(now: number, dt: number, alpha: number) {
     shake *= Math.exp(-dt * 9);
   }
   camera.lookAt(camLook);
+  listener.x = camLook.x; listener.y = camLook.z - 0.5;
+
+  // 서버 틱을 부드럽게 추정 (용암 균열 경고·분출, 모래폭풍 타이밍)
+  const lastSnap = snaps.at(-1);
+  if (lastSnap && meta?.phase !== 'lobby') {
+    const tickF = lastSnap.s.tick + (now - lastSnap.at) / (1000 / TICK_RATE);
+    arena.setTick(tickF);
+    updateSandstorm(tickF, dt);
+  } else {
+    updateSandstorm(-1, dt);
+  }
 
   arena.update(t, dt);
   renderer.render(scene, camera);
@@ -464,6 +585,19 @@ $('copy-btn').onclick = async () => {
   }
 };
 $('start-btn').onclick = () => net.send({ t: 'start' });
+
+// 🔊 효과음 / 🎵 배경음 켜고 끄기 (브라우저에 기억)
+const sfxBtn = $<HTMLButtonElement>('sfx-btn'), musicBtn = $<HTMLButtonElement>('music-btn');
+const paintSound = () => {
+  sfxBtn.textContent = audio.sfxOn ? '🔊' : '🔇';
+  sfxBtn.title = audio.sfxOn ? '효과음 끄기' : '효과음 켜기';
+  musicBtn.textContent = '🎵';
+  musicBtn.classList.toggle('off', !audio.musicOn);
+  musicBtn.title = audio.musicOn ? '배경음 끄기' : '배경음 켜기';
+};
+sfxBtn.onclick = () => { audio.unlock(); audio.toggleSfx(); paintSound(); sfxBtn.blur(); };
+musicBtn.onclick = () => { audio.unlock(); audio.toggleMusic(); paintSound(); musicBtn.blur(); };
+paintSound();
 
 function renderUI() {
   $('join').classList.toggle('hidden', joined);
@@ -610,5 +744,5 @@ renderUI();
 
 // 개발용: 주소에 ?debug를 붙이면 브라우저 콘솔에서 내부 상태 확인 가능
 if (new URLSearchParams(location.search).has('debug')) {
-  Object.assign(window, { __popop: { arena, input, get pred() { return pred; }, get rtt() { return rtt; }, get myPos() { return avatars.get(myId)?.model.root.position.clone(); } } });
+  Object.assign(window, { __popop: { arena, input, audio, get pred() { return pred; }, get rtt() { return rtt; }, get myPos() { return avatars.get(myId)?.model.root.position.clone(); } } });
 }

@@ -22,6 +22,8 @@ export interface CharacterModel {
   /** 매 프레임 호출. moving: 걷는 중, dead: 사망 연출 */
   animate(t: number, dt: number, moving: boolean): void;
   die(): void;
+  /** 🌲 덤불에 숨었을 때 반투명 처리 (1 = 보통) */
+  setOpacity(o: number): void;
   dispose(): void;
 }
 
@@ -129,6 +131,7 @@ export function createCharacter(index: number): CharacterModel {
   root.add(ring);
 
   let dying = -1;
+  let opacity = 1;
   const phase = index * 1.3;
   return {
     root,
@@ -155,6 +158,19 @@ export function createCharacter(index: number): CharacterModel {
       }
     },
     die() { if (dying < 0) dying = 0; },
+    setOpacity(o) {
+      if (o === opacity) return;
+      opacity = o;
+      root.traverse((obj) => {
+        const mm = (obj as THREE.Mesh).material as THREE.Material | undefined;
+        if (!mm || obj instanceof THREE.Sprite) return;
+        if (mm.userData.baseOpacity === undefined) mm.userData.baseOpacity = mm.opacity;
+        mm.transparent = o < 1 || mm.userData.baseOpacity < 1;
+        mm.opacity = mm.userData.baseOpacity * o;
+        mm.depthWrite = o >= 1;
+        (obj as THREE.Mesh).castShadow = o >= 1;
+      });
+    },
     dispose() {
       root.traverse((o) => {
         if (o instanceof THREE.Mesh && o.geometry !== sph) o.geometry.dispose();
