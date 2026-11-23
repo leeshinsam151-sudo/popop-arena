@@ -12,7 +12,7 @@ import { Net } from './net.ts';
 type Snap = Extract<ServerMsg, { t: 's' }>;
 type Meta = Extract<ServerMsg, { t: 'meta' }>;
 
-const INTERP_MS = 100; // 다른 플레이어는 100ms 전 상태를 보간해서 그림
+const INTERP_MS = 80; // 다른 플레이어는 80ms 전 상태를 보간해서 그림 (스냅샷 간격 50ms + 흔들림 여유)
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 const lerp = (a: number, b: number, k: number) => a + (b - a) * k;
@@ -69,8 +69,9 @@ let joined = false;
 let meta: Meta | null = null;
 const snaps: { at: number; s: Snap }[] = [];
 let pred: { state: GameState; me: PlayerState } | null = null;
-let prevPos = { x: 0, y: 0 };
-let curPos = { x: 0, y: 0 };
+/** 서버 보정으로 위치가 바뀔 때 순간이동처럼 보이지 않도록 서서히 줄여 나가는 화면 오프셋 */
+const corr = { x: 0, y: 0 };
+let rtt = 0; // 서버 왕복 시간(ms), 0이면 아직 측정 전
 let pending: { s: number; d: Dir }[] = [];
 let seq = 0;
 let shake = 0;
@@ -144,6 +145,13 @@ net.onMessage = (m) => {
   if (m.t === 'welcome') { myId = m.id; joined = true; renderUI(); }
   else if (m.t === 'meta') onMeta(m);
   else if (m.t === 's') onSnap(m);
+  else if (m.t === 'pong') {
+    const sample = performance.now() - m.c;
+    rtt = rtt ? rtt * 0.7 + sample * 0.3 : sample;
+    const el = $('ping');
+    el.textContent = `📶 ${Math.round(rtt)}ms`;
+    el.className = rtt < 90 ? 'good' : rtt < 160 ? 'ok' : 'bad';
+  }
   else if (m.t === 'error') { toast(m.msg); }
 };
 net.connect();
@@ -206,9 +214,11 @@ function onSnap(s: Snap) {
     };
     const mine = st.players[0];
     for (const p of pending) { movePlayer(st, mine, p.d, DT); updatePassers(st); }
-    if (!pred) prevPos = { x: mine.x, y: mine.y };
+    if (pred) {
+      const ex = pred.me.x - mine.x, ey = pred.me.y - mine.y;
+      if (Math.abs(ex) < 1 && Math.abs(ey) < 1) { corr.x += ex; corr.y += ey; } // 작은 보정은 부드럽게
+    }
     pred = { state: st, me: mine };
-    curPos = { x: mine.x, y: mine.y };
   } else {
     pred = null;
   }
@@ -222,13 +232,36 @@ function fixedStep() {
   const d = input.dir;
   net.send({ t: 'in', s: seq, d, b: input.bombCount });
   if (meta?.phase === 'playing' && pred && pred.me.alive) {
-    prevPos = { ...curPos };
     movePlayer(pred.state, pred.me, d, DT);
     updatePassers(pred.state);
-    curPos = { x: pred.me.x, y: pred.me.y };
     pending.push({ s: seq, d });
   }
 }
+
+/** 내 캐릭터 화면 위치: 다음 입력 틱까지 기다리지 않고, 지금 누른 키로 남은 시간만큼 미리 움직여 본다 */
+function previewMe(alpha: number): { x: number; y: number } {
+  const st = pred!.state, me = pred!.me;
+  const dir = input.dir;
+  if (dir === Dir.None || alpha <= 0 || !me.alive) return { x: me.x, y: me.y };
+  const ghost = { ...me };
+  const tmp: GameState = { ...st, players: [ghost], bombs: st.bombs.map((b) => ({ ...b })) };
+  movePlayer(tmp, ghost, dir, DT * alpha);
+  return { x: ghost.x, y: ghost.y };
+}
+
+// 폭탄 키: 서버 응답을 기다리지 않고 폭탄을 먼저 그림 (서버 폭탄이 도착하면 교체)
+input.onBomb = () => {
+  if (meta?.phase !== 'playing' || !pred || !pred.me.alive) return;
+  const me = pred.me, st = pred.state;
+  const cx = Math.round(me.x), cy = Math.round(me.y);
+  const onBomb = st.bombs.some((b) => b.fly === 0 && b.x === cx && b.y === cy);
+  if (onBomb) return; // 이미 폭탄 위 (글러브라면 던지기)
+  if (st.bombs.filter((b) => b.owner === myId).length >= me.bombMax) return;
+  arena.ghostBomb(cx, cy);
+};
+
+// 핑: 1초마다 서버 왕복 시간 측정
+setInterval(() => { if (net.open) net.send({ t: 'ping', c: performance.now() }); }, 1000);
 
 // ---------- 렌더 루프 ----------
 const camPos = new THREE.Vector3(9, 18, 21);
@@ -268,8 +301,11 @@ function render(now: number, dt: number, alpha: number) {
       const av = avatarFor(p.id, mp?.char ?? p.slot % CHARACTERS.length, mp?.name ?? '???');
       let x: number, y: number;
       if (p.id === myId && pred) {
-        x = lerp(prevPos.x, curPos.x, alpha);
-        y = lerp(prevPos.y, curPos.y, alpha);
+        const pv = previewMe(alpha);
+        const decay = Math.exp(-dt * 12);
+        corr.x *= decay; corr.y *= decay;
+        x = pv.x + corr.x;
+        y = pv.y + corr.y;
       } else {
         const pa = a.s.players.find((q) => q.id === p.id) ?? p;
         const pb = b.s.players.find((q) => q.id === p.id) ?? p;
@@ -494,3 +530,8 @@ if (!meta) {
   arena.setTiles(MAP_ROWS.glacier.join('').split('').map((ch) => tileFromChar(ch, () => 1)).join(''));
 }
 renderUI();
+
+// 개발용: 주소에 ?debug를 붙이면 브라우저 콘솔에서 내부 상태 확인 가능
+if (new URLSearchParams(location.search).has('debug')) {
+  Object.assign(window, { __popop: { arena, input, get pred() { return pred; }, get rtt() { return rtt; }, get myPos() { return avatars.get(myId)?.model.root.position.clone(); } } });
+}

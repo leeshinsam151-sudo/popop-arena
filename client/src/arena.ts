@@ -79,6 +79,8 @@ export class Arena {
   private lavaMat = new THREE.MeshStandardMaterial({ color: 0xff6a1f, emissive: 0xff3a00, emissiveIntensity: 1, roughness: 0.4 });
   private spinners: THREE.Object3D[] = [];
   private bombs = new Map<number, THREE.Group>();
+  /** 서버 확인 전에 먼저 그려 둔 폭탄 (키 누른 즉시 반응용) */
+  private ghosts = new Map<string, { g: THREE.Group; until: number }>();
   private items = new Map<string, THREE.Group>();
   private flameOuter: THREE.InstancedMesh;
   private flameInner: THREE.InstancedMesh;
@@ -253,6 +255,20 @@ export class Arena {
       g.userData.fuse = b.fuse;
     }
     for (const [id, g] of this.bombs) if (!seen.has(id)) { this.group.remove(g); this.bombs.delete(id); }
+    // 서버 폭탄이 도착한 칸의 임시 폭탄은 제거
+    for (const [k, gh] of this.ghosts) {
+      if (list.some((b) => `${b.x},${b.y}` === k)) { this.group.remove(gh.g); this.ghosts.delete(k); }
+    }
+  }
+
+  ghostBomb(x: number, y: number) {
+    const k = `${x},${y}`;
+    if (this.ghosts.has(k) || [...this.bombs.values()].some((g) => Math.round(g.position.x) === x && Math.round(g.position.z) === y)) return;
+    const g = makeBomb();
+    g.position.set(x, 0, y);
+    g.userData.fuse = 50;
+    this.group.add(g);
+    this.ghosts.set(k, { g, until: performance.now() + 700 }); // 서버가 거절하면 0.7초 뒤 사라짐
   }
 
   /** x, z: 칸 좌표, height: 던져져 날아가는 높이, spin: 굴러가는/날아가는 회전 */
@@ -283,6 +299,8 @@ export class Arena {
 
   clearDynamic() {
     this.syncBombs([]); this.syncItems([]); this.flames = [];
+    for (const gh of this.ghosts.values()) this.group.remove(gh.g);
+    this.ghosts.clear();
     for (const d of this.debris) this.group.remove(d.m);
     this.debris = [];
   }
@@ -296,6 +314,11 @@ export class Arena {
       const k = g.userData.airborne ? 1 : 1 + Math.sin(t * speed) * 0.06;
       g.scale.set(k, 2 - k, k);
       (g.userData.spark as THREE.Mesh).scale.setScalar(0.05 + Math.random() * 0.04);
+    }
+    const nowMs = performance.now();
+    for (const [k, gh] of this.ghosts) {
+      if (nowMs > gh.until) { this.group.remove(gh.g); this.ghosts.delete(k); continue; }
+      (gh.g.userData.spark as THREE.Mesh).scale.setScalar(0.05 + Math.random() * 0.04);
     }
     for (const g of this.items.values()) {
       (g.userData.icon as THREE.Object3D).position.y = 0.45 + Math.sin(t * 3 + g.position.x) * 0.07;

@@ -12,6 +12,8 @@ export class Input {
   private held: Dir[] = [];
   bombCount = 0;
   enabled = true;
+  /** 폭탄 키를 누른 순간 (화면에 폭탄을 먼저 그리는 데 사용) */
+  onBomb: () => void = () => {};
 
   constructor() {
     addEventListener('keydown', (e) => {
@@ -22,7 +24,7 @@ export class Input {
         if (!this.held.includes(d)) this.held.push(d);
       } else if (e.code === 'Space' || e.code === 'KeyJ') {
         e.preventDefault();
-        if (!e.repeat) this.bombCount++;
+        if (!e.repeat) { this.bombCount++; this.onBomb(); }
       }
     });
     addEventListener('keyup', (e) => {
@@ -38,7 +40,7 @@ export class Input {
 
   /** 터치 컨트롤 등 외부 입력용 */
   setHeld(d: Dir | null) { this.held = d ? [d] : []; }
-  pressBomb() { this.bombCount++; }
+  pressBomb() { this.bombCount++; this.onBomb(); }
 }
 
 function isTyping(e: KeyboardEvent) {

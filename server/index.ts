@@ -58,6 +58,10 @@ wss.on('connection', (ws: WebSocket & { alive?: boolean }) => {
     let msg: ClientMsg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (!msg || typeof msg !== 'object') return;
+    if (msg.t === 'ping') {
+      if (Number.isFinite(msg.c)) ws.send(JSON.stringify({ t: 'pong', c: msg.c }));
+      return;
+    }
 
     if (!room) {
       if (msg.t !== 'join') return;
