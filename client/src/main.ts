@@ -86,7 +86,7 @@ let lastFlames = 0;
 let hadKick = false;
 let hadGlove = false;
 
-interface Avatar { model: CharacterModel; char: number; name: string; team: number; last: { x: number; y: number }; dead: boolean; label: THREE.Sprite; trapped: number }
+interface Avatar { model: CharacterModel; char: number; name: string; team: number; last: { x: number; y: number }; dead: boolean; label: THREE.Sprite; trapped: number; deadAt: number; deathPos: { x: number; y: number } | null; ghost: boolean }
 const avatars = new Map<string, Avatar>();
 
 function nameSprite(text: string, color: number) {
@@ -119,7 +119,7 @@ function avatarFor(id: string, char: number, name: string, team = -1): Avatar {
     model.setRingColor(color);
     model.root.add(label);
     scene.add(model.root);
-    a = { model, char, name, team, last: { x: 0, y: 0 }, dead: false, label, trapped: 0 };
+    a = { model, char, name, team, last: { x: 0, y: 0 }, dead: false, label, trapped: 0, deadAt: 0, deathPos: null, ghost: false };
     avatars.set(id, a);
   }
   return a;
@@ -390,6 +390,8 @@ function frame(now: number) {
 }
 requestAnimationFrame(frame);
 
+let debugCam: { pos: [number, number, number]; look: [number, number, number] } | null = null;
+
 /** 🌪️ 사막: 45초마다 8초 동안 모래폭풍으로 시야가 좁아짐 (연출만, 판정 영향 없음) */
 let storm = 0;
 let stormOn = false;
@@ -423,7 +425,7 @@ function render(now: number, dt: number, alpha: number) {
       const mp = metaPlayer(p.id);
       const av = avatarFor(p.id, mp?.char ?? p.slot % CHARACTERS.length, mp?.name ?? '???', p.team);
       let x: number, y: number, h = 0;
-      if (p.id === myId && pred) {
+      if (p.id === myId && pred && p.alive) {
         const pv = previewMe(alpha);
         const decay = Math.exp(-dt * 12);
         corr.x *= decay; corr.y *= decay;
@@ -453,13 +455,26 @@ function render(now: number, dt: number, alpha: number) {
         diff = Math.atan2(Math.sin(diff), Math.cos(diff));
         av.model.root.rotation.y += diff * Math.min(1, dt * 18);
       }
+      // 👻 탈락: 쓰러진 자리에서 1.3초 쓰러지는 연출 → 경기장 밖(서버가 정한 유령 위치)에서 유령으로
+      if (!p.alive && !av.dead) {
+        av.dead = true; av.deadAt = now; av.deathPos = { ...av.last };
+        av.model.die(); av.label.visible = false;
+      }
+      if (av.dead && !av.ghost && now - av.deadAt < 1300) { x = av.deathPos!.x; y = av.deathPos!.y; }
+      else if (av.dead && !av.ghost) {
+        av.ghost = true;
+        av.model.becomeGhost();
+        av.model.root.remove(av.label);
+        av.label = nameSprite(`👻 ${mp?.name ?? '???'}`, 0xffffff);
+        av.label.position.y = 2.2;
+        av.model.root.add(av.label);
+      }
       av.model.root.position.set(x, h, y);
       av.last = { x, y };
       // 🌲 덤불 속: 다른 사람에게는 거의 안 보이고 이름표도 숨김, 나는 반투명
-      const inBush = meta.mapId === 'forest' && featureAt(meta.mapId, Math.round(x), Math.round(y)) === 'G' && h === 0;
-      av.model.setOpacity(inBush ? (p.id === myId ? 0.5 : 0.12) : 1);
+      const inBush = p.alive && meta.mapId === 'forest' && featureAt(meta.mapId, Math.round(x), Math.round(y)) === 'G' && h === 0;
+      if (p.alive) av.model.setOpacity(inBush ? (p.id === myId ? 0.5 : 0.12) : 1);
       if (p.alive) av.label.visible = !inBush || p.id === myId;
-      if (!p.alive && !av.dead) { av.dead = true; av.model.die(); av.label.visible = false; }
       av.model.animate(t, dt, moving && p.alive && !p.trapped);
       // 🫧 물방울: 서버가 알려 준 남은 시간 기준
       av.model.setBubble(p.alive && p.trapped ? p.trapped / BUBBLE_TICKS : 0, t);
@@ -494,10 +509,13 @@ function render(now: number, dt: number, alpha: number) {
   const look = focus
     ? new THREE.Vector3(clamp(focus.x, 6, mw - 7), 0, clamp(focus.y, 4, mh - 6) + 0.5)
     : new THREE.Vector3(cx, 0, cy + 1);
-  const pos = focus ? look.clone().add(new THREE.Vector3(0, 11.5, 8.5)) : look.clone().add(new THREE.Vector3(0, 21, 15).multiplyScalar(mw / 23)); // 전체 보기: 맵 크기에 맞춰 거리 조절
+  // 전체 보기: 맵 크기에 맞춰 거리 조절. 내가 유령이면 경기장 밖까지 보이게 조금 더 멀리
+  const meGhost = meta?.phase !== 'lobby' && latest?.players.find((p) => p.id === myId)?.alive === false;
+  const pos = focus ? look.clone().add(new THREE.Vector3(0, 11.5, 8.5)) : look.clone().add(new THREE.Vector3(0, 21, 15).multiplyScalar((mw / 23) * (meGhost ? 1.3 : 1)));
   const kk = 1 - Math.exp(-dt * 6);
   camPos.lerp(pos, kk);
   camLook.lerp(look, kk);
+  if (debugCam) { camPos.set(...debugCam.pos); camLook.set(...debugCam.look); } // 개발용 (?debug)
   camera.position.copy(camPos);
   if (shake > 0.001) {
     camera.position.x += (Math.random() - 0.5) * shake;
@@ -839,7 +857,7 @@ function updateHud(s: Snap) {
   const stats = $('mystats');
   stats.classList.toggle('hidden', !me);
   if (me) {
-    stats.textContent = !me.alive ? '👻 관전 중'
+    stats.textContent = !me.alive ? '👻 유령이 됐어요 · 방향키로 경기장 밖을 돌아다니며 구경해요'
       : me.trapped ? `🫧 갇혔어요! 같은 팀이 구해 줄 때까지 ${Math.ceil(me.trapped / TICK_RATE)}초`
       : `💣 ${me.bombMax}   🔥 ${me.range}   👟 ${me.speedLv + 1}${me.kick ? '   ⚽' : ''}${me.glove ? '   🧤' : ''}`;
     // 특수 아이템을 처음 얻으면 사용법 안내
@@ -868,5 +886,5 @@ renderUI();
 
 // 개발용: 주소에 ?debug를 붙이면 브라우저 콘솔에서 내부 상태 확인 가능
 if (new URLSearchParams(location.search).has('debug')) {
-  Object.assign(window, { __popop: { arena, input, audio, get pred() { return pred; }, get rtt() { return rtt; }, get myPos() { return avatars.get(myId)?.model.root.position.clone(); } } });
+  Object.assign(window, { __popop: { arena, input, audio, setCam: (c: typeof debugCam) => { debugCam = c; }, get pred() { return pred; }, get rtt() { return rtt; }, get myPos() { return avatars.get(myId)?.model.root.position.clone(); } } });
 }

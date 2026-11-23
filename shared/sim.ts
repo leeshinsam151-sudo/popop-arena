@@ -3,7 +3,7 @@
 // 맵 기믹(얼음·유사·버섯·워프·용암 균열·언 상자)도 모두 여기서 판정한다.
 import {
   BASE_SPEED, CORNER_ASSIST, DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, ICE_DECEL, ITEM_CHANCE, ITEM_WEIGHTS,
-  BUBBLE_SPEED_MUL, BUBBLE_TICKS, CONVEYOR_SPEED, RESCUE_SHIELD_TICKS, TOUCH_DIST,
+  BUBBLE_SPEED_MUL, BUBBLE_TICKS, CONVEYOR_SPEED, GHOST_RANGE, GHOST_SPEED, RESCUE_SHIELD_TICKS, TOUCH_DIST,
   ItemType, JUMP_DIST, JUMP_TIME, ROUND_TICKS, SUDDEN_SAFE_H, SUDDEN_SAFE_W, SUDDEN_TICKS, KICK_SPEED, LAVA_CYCLE, LAVA_ERUPT, LAVA_WARN, MAX_BOMBS, MAX_RANGE,
   MAX_SPEED_LV, QUICKSAND_MUL, SOFT_DENSITY, SPEED_STEP, THROW_BOUNCE_TICKS, THROW_DIST, THROW_TICKS, Tile, DT,
 } from './constants.ts';
@@ -27,6 +27,7 @@ export interface PlayerState {
   team: number; // 팀전: 0(A) / 1(B), 개인전: -1
   trapped: number; // 🫧 팀전: 물방울에 갇혀 남은 틱 (0이면 자유)
   shield: number; // 구출 직후 무적 남은 틱
+  ghost: boolean; // 👻 탈락 후 경기장 밖으로 나간 유령 (x, y는 유령 위치)
 }
 export interface Jump { t: number; total: number; sx: number; sy: number; tx: number; ty: number }
 export interface Bomb {
@@ -126,7 +127,7 @@ export function createGame(mapId: MapId, playerIds: string[], rand: () => number
     return {
       id, slot, x, y,
       alive: true, bombMax: 1, range: 2, speedLv: 0, kick: false, glove: false, facing: Dir.Down,
-      mom: 0, jump: null, warpLock: false, team, trapped: 0, shield: 0,
+      mom: 0, jump: null, warpLock: false, team, trapped: 0, shield: 0, ghost: false,
     };
   });
   return { mapId, w, h, tiles, players, bombs: [], flames: [], items: [], tick: 0, nextBombId: 1 };
@@ -270,7 +271,7 @@ function pushAlong(s: GameState, p: PlayerState, dir: Dir, dist: number) {
  * 기믹: 🧊 얼음 관성, 🏜️ 유사 감속, 🍄 버섯·🤸 트램펄린 점프, 🌀 워프, 🎢 컨베이어 벨트
  */
 export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): void {
-  if (!p.alive) return;
+  if (!p.alive) { if (p.ghost) moveGhost(s, p, dir, dt); return; }
 
   // 🍄 점프 중: 입력 무시, 정해진 포물선 경로를 따라감
   if (p.jump) {
@@ -338,6 +339,36 @@ function triggerFeatures(s: GameState, p: PlayerState, dir: Dir) {
       p.warpLock = true;
     }
   }
+}
+
+// ---------- 👻 유령 ----------
+/** 경기장(바깥 벽 포함) 직사각형에 걸쳐 있는가 */
+const insideArena = (s: GameState, x: number, y: number) => x > -1 && x < s.w && y > -1 && y < s.h;
+
+/** 탈락한 자리에서 가장 가까운 경기장 바깥쪽으로 유령을 내보냄 */
+function placeGhost(s: GameState, p: PlayerState) {
+  const x = p.x, y = p.y;
+  const opts: [number, number, number][] = [
+    [x + 0.5, -1.6, y], [s.w - 0.5 - x, s.w + 0.6, y], // 왼쪽, 오른쪽까지 거리
+    [y + 0.5, x, -1.6], [s.h - 0.5 - y, x, s.h + 0.6], // 위, 아래
+  ];
+  opts.sort((a, b) => a[0] - b[0]);
+  [, p.x, p.y] = opts[0];
+  p.ghost = true;
+  p.trapped = 0; p.jump = null; p.mom = 0; p.shield = 0;
+}
+
+/** 유령 이동: 벽·폭탄 무시하고 떠다니지만 경기장 안으로는 못 들어감 */
+function moveGhost(s: GameState, p: PlayerState, dir: Dir, dt: number) {
+  if (dir === Dir.None) return;
+  p.facing = dir;
+  const [dx, dy] = DIR_VEC[dir];
+  const nx = Math.max(-1 - GHOST_RANGE, Math.min(s.w + GHOST_RANGE, p.x + dx * GHOST_SPEED * dt));
+  const ny = Math.max(-1 - GHOST_RANGE, Math.min(s.h + GHOST_RANGE, p.y + dy * GHOST_SPEED * dt));
+  if (!insideArena(s, nx, ny)) { p.x = nx; p.y = ny; return; }
+  // 경기장 쪽으로 들어가려 하면 테두리를 따라 미끄러지게 (진행 축만 막음)
+  if (dx && !insideArena(s, nx, p.y)) p.x = nx;
+  if (dy && !insideArena(s, p.x, ny)) p.y = ny;
 }
 
 /** 폭탄에서 완전히 빠져나간 플레이어는 더 이상 그 폭탄을 통과할 수 없다. */
@@ -533,6 +564,8 @@ export function stepWorld(s: GameState, rand: () => number): void {
     if (i >= 0) { applyItem(p, s.items[i].type); s.items.splice(i, 1); }
   }
   if (s.players.some((p) => p.team >= 0)) resolveBubbles(s);
+  // 👻 이번 틱에 탈락한 사람은 경기장 밖 유령으로
+  for (const p of s.players) if (!p.alive && !p.ghost) placeGhost(s, p);
 }
 
 /** 🫧 팀전: 갇힌 사람에게 아군이 닿으면 구출, 적이 닿으면 탈락. 팀 전원이 갇히면 그 팀 전멸 */

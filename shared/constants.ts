@@ -36,6 +36,10 @@ export enum Tile {
   Fallen = 6, // ⚠️ 서든데스로 떨어진 벽 (벽과 같음)
 }
 
+// ---------- 유령 관전 ----------
+export const GHOST_SPEED = 4; // 👻 탈락 후 경기장 밖을 떠다니는 속도 (칸/초)
+export const GHOST_RANGE = 4.5; // 경기장 밖으로 이만큼까지 돌아다닐 수 있음 (칸)
+
 // ---------- 서든데스 ----------
 export const SUDDEN_TICKS = 60 * TICK_RATE; // 판의 마지막 60초
 export const SUDDEN_WARN = 16; // 떨어지기 0.8초 전부터 경고

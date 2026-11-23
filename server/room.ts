@@ -265,7 +265,7 @@ export class Room {
       // 🤖 봇: 사람과 같은 방식으로 입력
       for (const [id, mind] of this.minds) {
         const p = s.players.find((pp) => pp.id === id);
-        if (!p?.alive) continue;
+        if (!p) continue;
         const inp = botThink(s, p, mind);
         if (inp.bomb) bombAction(s, p);
         movePlayer(s, p, inp.dir, DT);

@@ -4,6 +4,7 @@ import { ItemType, Tile } from '../../shared/constants.ts';
 import { MAP_ROWS, type MapId } from '../../shared/maps.ts';
 import { lavaCracks, lavaState, suddenSchedule, type Bomb, type Flame, type Item } from '../../shared/sim.ts';
 import { SUDDEN_WARN } from '../../shared/constants.ts';
+import { buildScenery, type Scenery } from './scenery.ts';
 
 interface Theme {
   fa: number; fb: number; sky: number;
@@ -102,6 +103,8 @@ export class Arena {
   private crackBits!: THREE.InstancedMesh;
   private iceDebrisMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.85 });
   private tick = 0;
+  /** 경기장 밖 풍경과 돌아다니는 동물 */
+  private scenery: Scenery | null = null;
   /** ⚠️ 서든데스: 떨어진 벽(낙하 연출 포함)과 곧 떨어질 칸 경고 */
   private fallen!: THREE.InstancedMesh;
   private fallenCap!: THREE.InstancedMesh;
@@ -291,6 +294,8 @@ export class Arena {
       }
     }));
     B.flush(this.statics);
+    this.scenery = buildScenery(mapId, this.w, this.h);
+    this.statics.add(this.scenery.group);
     // 🎢 벨트 화살표: 칸마다 2개, 매 프레임 벨트 방향으로 흘려 보냄
     this.beltArrows = new THREE.InstancedMesh(G.arrow, new THREE.MeshBasicMaterial({ color: 0xffd166 }), Math.max(1, this.belts.length * 2));
     this.beltArrows.count = this.belts.length * 2;
@@ -495,6 +500,7 @@ export class Arena {
   }
 
   update(t: number, dt: number) {
+    this.scenery?.update(t, dt);
     // 🌋 용암 균열: 경고 중엔 점점 밝아지고, 분출 중엔 불기둥
     const tk = Math.floor(this.tick);
     for (const fx of this.lavaFx) {

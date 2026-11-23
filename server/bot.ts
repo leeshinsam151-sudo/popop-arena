@@ -13,8 +13,9 @@ const SAFE = Infinity;
 export interface BotMind {
   nextBombTick: number; // 폭탄을 너무 연달아 놓지 않도록
   wander: number; // 할 일이 없을 때 잠깐 쉬는 등 사람처럼 보이게
+  ghostDir: Dir; // 👻 탈락 후 유령으로 어슬렁거리는 방향
 }
-export const newBotMind = (): BotMind => ({ nextBombTick: 0, wander: 0 });
+export const newBotMind = (): BotMind => ({ nextBombTick: 0, wander: 0, ghostDir: Dir.None });
 
 /** 각 칸이 몇 틱 뒤에 불길이 되는지 (SAFE = 안전) */
 function dangerMap(s: GameState, extra?: { x: number; y: number; range: number }): number[] {
@@ -151,7 +152,11 @@ function bombValue(s: GameState, me: PlayerState, x: number, y: number): number 
 
 /** 봇의 이번 틱 입력 */
 export function botThink(s: GameState, me: PlayerState, mind: BotMind): { dir: Dir; bomb: boolean } {
-  if (!me.alive || me.jump) return { dir: Dir.None, bomb: false };
+  if (!me.alive) { // 👻 유령: 가끔 방향을 바꿔 가며 어슬렁
+    if (Math.random() < 0.03) mind.ghostDir = Math.floor(Math.random() * 5) as Dir;
+    return { dir: mind.ghostDir, bomb: false };
+  }
+  if (me.jump) return { dir: Dir.None, bomb: false };
   const cx = Math.round(me.x), cy = Math.round(me.y);
   const here = cy * s.w + cx;
   const danger = dangerMap(s);

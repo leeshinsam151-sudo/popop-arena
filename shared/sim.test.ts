@@ -356,3 +356,30 @@ test('⚠️ 서든데스: 떨어진 칸은 벽이 되고 그 위 사람은 탈�
   for (const [x, y] of cells) assert.equal(s.tiles[y * s.w + x], Tile.Fallen);
   assert.ok(isBlocked(s, 1, 1, 'p1'));
 });
+
+// ---------- 유령 👻 ----------
+test('👻 탈락하면 가장 가까운 경기장 바깥으로 나가 유령이 된다', () => {
+  const s = emptyGame();
+  const p = s.players[0]; // (1,1): 왼쪽·위쪽 벽이 가깝다
+  p.x = 1; p.y = 3;
+  s.flames.push({ x: 1, y: 3, ttl: 5 });
+  stepWorld(s, noRand);
+  assert.equal(p.alive, false);
+  assert.ok(p.ghost);
+  assert.ok(p.x < -1, `moved out to the left: x=${p.x}`);
+  assert.equal(p.y, 3);
+});
+
+test('👻 유령은 경기장 밖에서만 움직이고, 안으로 들어가려 하면 막힌다', () => {
+  const s = emptyGame();
+  const p = s.players[0];
+  p.x = 1; p.y = 3;
+  s.flames.push({ x: 1, y: 3, ttl: 5 });
+  stepWorld(s, noRand);
+  press(s, p, Dir.Right, 40); // 경기장 쪽으로 가도
+  assert.ok(p.x <= -1, `stops at the arena edge: x=${p.x}`);
+  press(s, p, Dir.Up, 40); // 테두리를 따라 위로
+  assert.ok(p.y < 3);
+  press(s, p, Dir.Left, 200);
+  assert.ok(p.x >= -1 - 4.5 - 1e-9, 'cannot wander too far');
+});

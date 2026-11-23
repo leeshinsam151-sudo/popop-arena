@@ -22,6 +22,8 @@ export interface CharacterModel {
   /** 매 프레임 호출. moving: 걷는 중, dead: 사망 연출 */
   animate(t: number, dt: number, moving: boolean): void;
   die(): void;
+  /** 👻 쓰러진 뒤 유령으로: 반투명하게 떠다니고 발·링은 숨김 */
+  becomeGhost(): void;
   /** 🌲 덤불에 숨었을 때 반투명 처리 (1 = 보통) */
   setOpacity(o: number): void;
   /** 발밑 링 색 (팀전이면 팀 색) */
@@ -150,6 +152,7 @@ export function createCharacter(index: number): CharacterModel {
   root.add(bubble);
 
   let dying = -1;
+  let ghost = false;
   let opacity = 1;
   const phase = index * 1.3;
   return {
@@ -162,6 +165,12 @@ export function createCharacter(index: number): CharacterModel {
         const s = Math.max(0.001, 1 - dying * 0.8);
         root.scale.setScalar(s);
         root.visible = dying < 1.3;
+        return;
+      }
+      if (ghost) { // 👻 둥실둥실, 살짝 흔들흔들
+        body.position.y = 0.35 + Math.sin(t * 2 + phase) * 0.12;
+        body.rotation.z = Math.sin(t * 1.3 + phase) * 0.12;
+        head.rotation.z = Math.sin(t * 1.7 + phase) * 0.08;
         return;
       }
       const p = t * (moving ? 12 : 3) + phase;
@@ -177,6 +186,18 @@ export function createCharacter(index: number): CharacterModel {
       }
     },
     die() { if (dying < 0) dying = 0; },
+    becomeGhost() {
+      dying = -1;
+      ghost = true;
+      root.visible = true;
+      root.position.y = 0;
+      root.scale.setScalar(1);
+      body.rotation.z = 0;
+      for (const f of feet) f.visible = false;
+      ring.visible = false;
+      bubble.visible = false;
+      this.setOpacity(0.42);
+    },
     setRingColor(c) { (ring.material as THREE.MeshBasicMaterial).color.set(c); },
     setBubble(left, t) {
       bubble.visible = left > 0;
