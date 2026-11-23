@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DT, Dir, FUSE_TICKS, JUMP_TIME, Tile } from './constants.ts';
-import { bombAction, createGame, lavaCracks, lavaState, movePlayer, placeBomb, stepWorld, throwBomb, updatePassers, type GameState, type PlayerState } from './sim.ts';
+import { MAP_ROWS } from './maps.ts';
+import { bombAction, createGame, lavaCracks, seededRandom, lavaState, movePlayer, placeBomb, stepWorld, throwBomb, updatePassers, type GameState, type PlayerState } from './sim.ts';
 
 const noRand = () => 0.99; // 랜덤 블록 없음, 아이템 없음
 
@@ -210,4 +211,26 @@ test('🌋 용암 균열: 주기적으로 분출하고, 분출 중 위에 있으
   }
   assert.ok(erupted);
   assert.equal(p.alive, false);
+});
+
+test('🌀🍄 도착 칸 주변에는 랜덤 블록이 없어서 갇히지 않는다 (시드 200개)', () => {
+  for (let seed = 1; seed <= 200; seed++) {
+    for (const mapId of ['desert', 'forest'] as const) {
+      const s = createGame(mapId, ['p0'], seededRandom(seed));
+      const rows = MAP_ROWS[mapId];
+      const arrivals: [number, number][] = [];
+      rows.forEach((row, y) => [...row].forEach((ch, x) => {
+        if ('ABC'.includes(ch)) arrivals.push([x, y]);
+        if (ch === 'M') for (const [dx, dy] of [[0, 2], [0, -2], [2, 0], [-2, 0]]) {
+          const tx = x + dx, ty = y + dy;
+          if (tx > 0 && ty > 0 && tx < s.w - 1 && ty < s.h - 1) arrivals.push([tx, ty]);
+        }
+      }));
+      for (const [x, y] of arrivals) {
+        for (const [dx, dy] of [[0, 1], [0, -1], [1, 0], [-1, 0]]) {
+          assert.notEqual(s.tiles[(y + dy) * s.w + (x + dx)], Tile.Soft, `${mapId} seed ${seed}: soft block next to (${x},${y})`);
+        }
+      }
+    }
+  }
 });

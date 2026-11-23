@@ -300,8 +300,9 @@ export class Arena {
   setSandstorm(k: number) {
     const fog = this.scene.fog as THREE.Fog | null;
     if (!fog) return;
-    fog.near = this.fogBase[0] + (7 - this.fogBase[0]) * k;
-    fog.far = this.fogBase[1] + (17 - this.fogBase[1]) * k;
+    // 카메라에서 내 캐릭터까지 약 14칸: 그 근처는 선명하게 두고 멀리만 가림
+    fog.near = this.fogBase[0] + (12.5 - this.fogBase[0]) * k;
+    fog.far = this.fogBase[1] + (20 - this.fogBase[1]) * k;
     fog.color.copy(this.fogColor).lerp(new THREE.Color(0xd9b27a), k);
     (this.scene.background as THREE.Color | null)?.copy(fog.color);
   }

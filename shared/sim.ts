@@ -73,11 +73,36 @@ export function tileFromChar(ch: string, rand: () => number): Tile {
   }
 }
 
+/**
+ * 순간이동해서 도착하는 칸(🌀 워프 석판, 🍄 버섯 착지 칸) 주변에는 랜덤 블록을 두지 않는다.
+ * 안 그러면 사방이 막힌 한 칸에 갇혀서, 빠져나가지도 못하고 폭탄을 놓으면 피할 곳도 없다.
+ */
+function clearArrivalZones(rows: string[], tiles: number[], w: number, h: number) {
+  const clearAround = (x: number, y: number) => {
+    for (const [dx, dy] of DIR_VEC.slice(1)) {
+      const nx = x + dx, ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+      if (rows[ny][nx] === '.' && tiles[ny * w + nx] === Tile.Soft) tiles[ny * w + nx] = Tile.Floor;
+    }
+  };
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const ch = rows[y][x];
+    if (ch === 'A' || ch === 'B' || ch === 'C') clearAround(x, y);
+    if (ch === 'M') {
+      for (const [dx, dy] of DIR_VEC.slice(1)) {
+        const tx = x + dx * JUMP_DIST, ty = y + dy * JUMP_DIST;
+        if (tx > 0 && ty > 0 && tx < w - 1 && ty < h - 1) clearAround(tx, ty);
+      }
+    }
+  }
+}
+
 export function createGame(mapId: MapId, playerIds: string[], rand: () => number): GameState {
   const rows = MAP_ROWS[mapId];
   const h = rows.length, w = rows[0].length;
   const tiles: number[] = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) tiles.push(tileFromChar(rows[y][x], rand));
+  clearArrivalZones(rows, tiles, w, h);
   const spawns = spawnOrder(w, h);
   const players = playerIds.map((id, slot): PlayerState => ({
     id, slot,
