@@ -65,10 +65,10 @@ test('폭발: 블록 파괴, 사거리 안 플레이어 사망, 벽에서 멈춤
 test('연쇄 폭발: 불길에 닿은 폭탄은 같은 틱에 터진다', () => {
   const s = emptyGame();
   const [a, b] = s.players;
-  a.x = 5; a.y = 3; placeBomb(s, a);
+  a.x = 3; a.y = 5; placeBomb(s, a);
   run(s, 10);
-  b.x = 7; b.y = 3; placeBomb(s, b);
-  a.x = 1; a.y = 1; b.x = 21; b.y = 17;
+  b.x = 5; b.y = 5; placeBomb(s, b);
+  a.x = 1; a.y = 1; b.x = s.w - 2; b.y = s.h - 2;
   run(s, FUSE_TICKS - 10);
   assert.equal(s.bombs.length, 0, 'both exploded together');
 });

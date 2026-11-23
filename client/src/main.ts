@@ -3,7 +3,7 @@ import './style.css';
 import { CHARACTERS, DT, Dir, MAX_PLAYERS, TICK_RATE } from '../../shared/constants.ts';
 import { MAP_IDS, MAP_NAMES, MAP_ROWS, type MapId } from '../../shared/maps.ts';
 import type { MetaPlayer, ServerMsg } from '../../shared/protocol.ts';
-import { SPAWN_ORDER, movePlayer, tileFromChar, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
+import { spawnOrder, movePlayer, tileFromChar, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
 import { Arena } from './arena.ts';
 import { createCharacter, type CharacterModel } from './characters.ts';
 import { Input } from './input.ts';
@@ -43,11 +43,11 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
 scene.add(new THREE.HemisphereLight(0xffffff, 0x8899aa, 1.0));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
-sun.position.set(19, 26, 21);
-sun.target.position.set(11, 0, 9);
+sun.position.set(17, 26, 19);
+sun.target.position.set(9, 0, 7);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, far: 80 });
+Object.assign(sun.shadow.camera, { left: -13, right: 13, top: 13, bottom: -13, far: 80 });
 sun.shadow.bias = -0.0006;
 scene.add(sun, sun.target);
 
@@ -169,10 +169,11 @@ function showLobbyScene() {
     arena.setTiles(MAP_ROWS[meta.mapId].join('').split('').map((ch) => tileFromChar(ch, () => 1)).join(''));
   }
   const lobbyIds = new Set<string>();
+  const spawns = spawnOrder(arena.w, arena.h);
   meta.players.slice(0, MAX_PLAYERS).forEach((p, i) => {
     lobbyIds.add(p.id);
     const a = avatarFor(p.id, p.char, p.name);
-    const [x, y] = SPAWN_ORDER[i];
+    const [x, y] = spawns[i];
     a.model.root.position.set(x, 0, y);
     a.model.root.rotation.y = 0;
     a.last = { x, y };
@@ -228,8 +229,8 @@ function fixedStep() {
 }
 
 // ---------- 렌더 루프 ----------
-const camPos = new THREE.Vector3(11, 22, 25);
-const camLook = new THREE.Vector3(11, 0, 9);
+const camPos = new THREE.Vector3(9, 18, 21);
+const camLook = new THREE.Vector3(9, 0, 7);
 camera.position.copy(camPos);
 let acc = 0;
 let last = performance.now();
@@ -293,13 +294,14 @@ function render(now: number, dt: number, alpha: number) {
   }
 
   // 카메라: 살아 있으면 내 캐릭터 추적, 아니면 맵 전체
-  const cx = (arena.w || 23) / 2 - 0.5, cy = (arena.h || 19) / 2 - 0.5;
+  const mw = arena.w || 19, mh = arena.h || 15;
+  const cx = (mw - 1) / 2, cy = (mh - 1) / 2;
   // 추적 카메라는 맵 가장자리에서 바깥 빈 공간을 비추지 않도록 범위를 제한
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
   const look = focus
-    ? new THREE.Vector3(clamp(focus.x, 6, (arena.w || 23) - 7), 0, clamp(focus.y, 4, (arena.h || 19) - 6) + 0.5)
+    ? new THREE.Vector3(clamp(focus.x, 6, mw - 7), 0, clamp(focus.y, 4, mh - 6) + 0.5)
     : new THREE.Vector3(cx, 0, cy + 1);
-  const pos = focus ? look.clone().add(new THREE.Vector3(0, 11.5, 8.5)) : look.clone().add(new THREE.Vector3(0, 21, 15));
+  const pos = focus ? look.clone().add(new THREE.Vector3(0, 11.5, 8.5)) : look.clone().add(new THREE.Vector3(0, 21, 15).multiplyScalar(mw / 23)); // 전체 보기: 맵 크기에 맞춰 거리 조절
   const kk = 1 - Math.exp(-dt * 6);
   camPos.lerp(pos, kk);
   camLook.lerp(look, kk);

@@ -32,7 +32,7 @@ const THEMES: Record<MapId, Theme> = {
   desert: {
     fa: 0xf2d797, fb: 0xe9cb87, sky: 0xf7e3b5,
     wall: { color: 0xc99a5b, roughness: 0.9 }, cap: 0xe6c283,
-    soft: 0xe2b870, band: { color: 0xc4914e },
+    soft: 0xd98c4a, band: { color: 0xa85f2c },
     floor: { Q: 0xcfa865 },
   },
 };

@@ -43,9 +43,10 @@ export interface GameState {
 }
 
 /** 스폰 순서: 2명은 대각선, 4명은 네 모서리, 5~6명째는 위아래 가운데 */
-export const SPAWN_ORDER: ReadonlyArray<readonly [number, number]> = [
-  [1, 1], [21, 17], [21, 1], [1, 17], [11, 1], [11, 17],
-];
+export function spawnOrder(w: number, h: number): [number, number][] {
+  const cx = Math.floor(w / 2);
+  return [[1, 1], [w - 2, h - 2], [w - 2, 1], [1, h - 2], [cx, 1], [cx, h - 2]];
+}
 
 export function tileFromChar(ch: string, rand: () => number): Tile {
   switch (ch) {
@@ -62,9 +63,10 @@ export function createGame(mapId: MapId, playerIds: string[], rand: () => number
   const h = rows.length, w = rows[0].length;
   const tiles: number[] = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) tiles.push(tileFromChar(rows[y][x], rand));
+  const spawns = spawnOrder(w, h);
   const players = playerIds.map((id, slot): PlayerState => ({
     id, slot,
-    x: SPAWN_ORDER[slot][0], y: SPAWN_ORDER[slot][1],
+    x: spawns[slot][0], y: spawns[slot][1],
     alive: true, bombMax: 1, range: 2, speedLv: 0, facing: Dir.Down,
   }));
   return { mapId, w, h, tiles, players, bombs: [], flames: [], items: [], tick: 0, nextBombId: 1 };
