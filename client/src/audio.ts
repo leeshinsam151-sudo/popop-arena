@@ -4,7 +4,8 @@ import type { MapId } from '../../shared/maps.ts';
 
 export type Sfx =
   | 'place' | 'explode' | 'pickup' | 'power' | 'kick' | 'throw' | 'land' | 'death'
-  | 'warp' | 'boing' | 'lava' | 'crack' | 'tick' | 'start' | 'win' | 'lose' | 'trap' | 'rescue';
+  | 'warp' | 'boing' | 'lava' | 'crack' | 'tick' | 'start' | 'win' | 'lose' | 'trap' | 'rescue'
+  | 'siren' | 'thud' | 'champion';
 export type MusicId = MapId | 'lobby';
 
 const load = (k: string) => { try { return localStorage.getItem(k) !== '0'; } catch { return true; } };
@@ -221,6 +222,20 @@ export class GameAudio {
         this.hiss(o, 0.06, 'highpass', 2500, 2500, 0.35);
         this.notes(o, [880, 1175, 1568], 0.06, 0.07, 'triangle', 0.32);
         break;
+      case 'siren': // ⚠️ 서든데스 시작: 오르내리는 경보음 두 번
+        for (let i = 0; i < 2; i++) {
+          this.tone(o, 620, 980, 0.35, 'sawtooth', 0.1, i * 0.7);
+          this.tone(o, 980, 620, 0.35, 'sawtooth', 0.1, i * 0.7 + 0.35);
+        }
+        break;
+      case 'thud': // 벽이 쿵 떨어짐
+        this.tone(o, 90, 40, 0.25, 'sine', 0.7);
+        this.hiss(o, 0.12, 'lowpass', 900, 200, 0.3);
+        break;
+      case 'champion': // 🏆 세트 최종 우승 팡파르
+        this.notes(o, [523, 523, 523, 698, 880, 784, 880, 1047], 0.13, 0.12, 'square', 0.17);
+        this.notes(o, [262, 262, 262, 349, 440, 392, 440, 523], 0.13, 0.12, 'triangle', 0.3);
+        break;
       case 'tick':
         this.tone(o, 1250, 1250, 0.06, 'square', 0.12);
         break;
@@ -238,7 +253,12 @@ export class GameAudio {
   }
 
   // ---------- 배경음 ----------
+  private tempo = 1;
+  /** 배경음 빠르기 배율 (서든데스 때 빨라짐) */
+  setTempo(mult: number) { this.tempo = mult; }
+
   setMusic(id: MusicId) {
+    this.tempo = 1;
     if (this.music === id) return;
     this.music = id;
     this.melody = composeMelody(SONGS[id]);
@@ -257,7 +277,7 @@ export class GameAudio {
     const ctx = this.ctx;
     if (!ctx || !this.music) return;
     const song = SONGS[this.music];
-    const sixteenth = 60 / song.bpm / 4;
+    const sixteenth = 60 / (song.bpm * this.tempo) / 4;
     while (this.nextTime < ctx.currentTime + 0.15) {
       this.playStep(song, this.step % 64, this.nextTime, sixteenth);
       this.nextTime += sixteenth;

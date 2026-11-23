@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import { CHARACTERS, DT, Dir, END_TICKS, MAX_PLAYERS, ROUND_TICKS } from '../shared/constants.ts';
+import { CHARACTERS, DT, Dir, END_TICKS, MAX_PLAYERS, ROUND_TICKS, SUDDEN_TICKS } from '../shared/constants.ts';
 import { MAP_IDS, type MapId } from '../shared/maps.ts';
 import type { ClientMsg, MapPick, MetaPlayer, Mode, Phase, ServerMsg } from '../shared/protocol.ts';
 import { bombAction, createGame, movePlayer, stepWorld, updatePassers, type GameState } from '../shared/sim.ts';
@@ -41,7 +41,12 @@ export class Room {
   private state: GameState | null = null;
   private timeLeft = 0;
   private endTicks = 0;
-  private result: { winner: string | null; team?: number } | undefined;
+  private result: { winner: string | null; team?: number; final?: boolean } | undefined;
+  // 🏆 세트제
+  private target = 1; // 먼저 이 승수를 채우면 우승
+  private round = 0;
+  private score = new Map<string, number>();
+  private roster: { ids: string[]; teams?: number[] } | null = null; // 세트 동안 고정된 참가자
 
   constructor(readonly code: string, private onEmpty: () => void) {}
 
@@ -156,6 +161,12 @@ export class Room {
           this.refreshLobby();
         }
         break;
+      case 'sets':
+        if (isHost && this.phase === 'lobby' && [1, 2, 3].includes(msg.n)) {
+          this.target = msg.n;
+          this.broadcastMeta();
+        }
+        break;
       case 'team':
         if (this.phase === 'lobby' && (msg.team === 0 || msg.team === 1)) {
           c.team = msg.team;
@@ -166,7 +177,6 @@ export class Room {
   }
 
   private startRound(host: Client) {
-    const all = [...this.clients.values()];
     const humans = this.humans();
     const team = this.mode === 'team';
     if (team) {
@@ -176,21 +186,40 @@ export class Room {
         return;
       }
     }
-    for (const c of all) {
-      c.playing = humans.includes(c);
+    // 세트 시작: 참가자 고정, 점수 초기화
+    this.roster = {
+      ids: [...humans.map((h) => h.id), ...this.bots.map((b) => b.id)],
+      teams: team ? [...humans.map((h) => h.team), ...this.bots.map((b) => b.team)] : undefined,
+    };
+    this.score.clear();
+    this.round = 0;
+    this.beginRound();
+  }
+
+  /** 세트의 다음 판 시작 (나간 사람은 빠짐) */
+  private beginRound() {
+    const roster = this.roster!;
+    const keep = roster.ids.map((id) => id.startsWith('bot-') || this.clients.has(id));
+    const ids = roster.ids.filter((_, i) => keep[i]);
+    const teams = roster.teams?.filter((_, i) => keep[i]);
+    for (const c of this.clients.values()) {
+      c.playing = ids.includes(c.id);
       c.inputs = [];
       c.bombPressed = c.lastB; // 라운드 전에 누른 폭탄은 무시
     }
-    const ids = [...humans.map((h) => h.id), ...this.bots.map((b) => b.id)];
-    const teams = team ? [...humans.map((h) => h.team), ...this.bots.map((b) => b.team)] : undefined;
     if (this.pick === 'random') this.mapId = MAP_IDS[Math.floor(Math.random() * MAP_IDS.length)];
     this.state = createGame(this.mapId, ids, Math.random, teams);
-    this.minds = new Map(this.bots.map((b) => [b.id, newBotMind()]));
+    this.minds = new Map(ids.filter((id) => id.startsWith('bot-')).map((id) => [id, newBotMind()]));
+    this.round++;
     if (process.env.DEV_ITEMS === '1') devItems(this.state);
     if (process.env.DEV_CLEAR === '1') { // 개발·테스트용: 부서지는 블록 없이 시작 (기믹 확인용)
       this.state.tiles = this.state.tiles.map((t) => (t === 2 ? 0 : t));
     }
     this.timeLeft = ROUND_TICKS;
+    if (process.env.DEV_SUDDEN === '1') { // 개발·테스트용: 서든데스 3초 전부터 시작
+      this.state.tick = ROUND_TICKS - SUDDEN_TICKS - 3 * 20;
+      this.timeLeft = SUDDEN_TICKS + 3 * 20;
+    }
     this.phase = 'playing';
     this.result = undefined;
     this.broadcastMeta();
@@ -198,15 +227,20 @@ export class Room {
 
   private endRound(winner: string | null, team?: number) {
     this.phase = 'ended';
-    this.endTicks = END_TICKS;
-    this.result = { winner, team };
-    const winners = team !== undefined
-      ? this.state!.players.filter((p) => p.team === team).map((p) => p.id)
-      : winner ? [winner] : [];
-    for (const id of winners) {
-      const c = this.clients.get(id);
-      if (c) c.wins++;
-      else if (id.startsWith('bot-')) this.botWins.set(id, (this.botWins.get(id) ?? 0) + 1);
+    const key = team !== undefined ? `team${team}` : winner;
+    if (key) this.score.set(key, (this.score.get(key) ?? 0) + 1);
+    // 세트 끝: 목표 승수 달성, 한 판 모드, 혼자 남음(연습)
+    const final = this.target === 1 || this.state!.players.length < 2 || (!!key && this.score.get(key)! >= this.target);
+    this.result = { winner, team, final };
+    this.endTicks = final ? END_TICKS * 2 : END_TICKS;
+    if (final && key) {
+      // 대기실 승수 = 세트(최종) 우승 횟수
+      const winners = team !== undefined ? this.state!.players.filter((p) => p.team === team).map((p) => p.id) : [key];
+      for (const id of winners) {
+        const c = this.clients.get(id);
+        if (c) c.wins++;
+        else if (id.startsWith('bot-')) this.botWins.set(id, (this.botWins.get(id) ?? 0) + 1);
+      }
     }
     this.broadcastMeta();
   }
@@ -244,8 +278,10 @@ export class Room {
       updatePassers(s);
       stepWorld(s, Math.random); // 불길이 사라지는 모습까지 보여 줌
       if (--this.endTicks <= 0) {
+        if (!this.result?.final) { this.beginRound(); return; } // 세트 중: 바로 다음 판
         this.phase = 'lobby';
         this.state = null;
+        this.roster = null;
         for (const c of this.clients.values()) c.playing = false;
         this.refreshLobby();
         return;
@@ -295,6 +331,7 @@ export class Room {
     const msg: ServerMsg = {
       t: 'meta', host: this.host, phase: this.phase, pick: this.pick, mapId: this.mapId,
       players, mode: this.mode, bots: this.botCount, result: this.result,
+      target: this.target, round: this.round, score: Object.fromEntries(this.score),
     };
     const text = JSON.stringify(msg);
     for (const c of this.clients.values()) if (c.ws.readyState === 1) c.ws.send(text);

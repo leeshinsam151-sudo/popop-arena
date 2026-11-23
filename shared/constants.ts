@@ -33,7 +33,14 @@ export enum Tile {
   Pit = 3, // 용암 강: 걸어서 못 건너지만 불길은 통과
   Frozen = 4, // 🧊 언 상자: 한 번 맞으면 금이 감
   Cracked = 5, // 🧊 금 간 상자: 한 번 더 맞으면 깨지고 아이템이 반드시 나옴
+  Fallen = 6, // ⚠️ 서든데스로 떨어진 벽 (벽과 같음)
 }
+
+// ---------- 서든데스 ----------
+export const SUDDEN_TICKS = 60 * TICK_RATE; // 판의 마지막 60초
+export const SUDDEN_WARN = 16; // 떨어지기 0.8초 전부터 경고
+export const SUDDEN_SAFE_W = 2; // 끝까지 안 떨어지는 가운데 구역 (가로 ±2, 세로 ±1)
+export const SUDDEN_SAFE_H = 1;
 
 // ---------- 맵 기믹 ----------
 export const ICE_DECEL = 4.5; // 🧊 얼음 위에서 손을 떼면 이 감속도(칸/초²)로 미끄러지다 멈춤 → 약 1칸 더 감

@@ -117,6 +117,15 @@ kbd { font-family: inherit; padding: 1px 6px; border-radius: 6px; background: rg
   background: var(--panel); border-radius: 999px; padding: 6px 18px; font-size: 24px;
 }
 #timer.warn { color: #ff6a5a; }
+#timer.sudden { background: #b3261e; color: #fff; animation: pulse 0.8s ease-in-out infinite alternate; }
+@keyframes pulse { to { transform: translateX(-50%) scale(1.08); } }
+#setbar {
+  position: absolute; top: 62px; left: 50%; transform: translateX(-50%); white-space: nowrap;
+  background: var(--panel); border-radius: 999px; padding: 4px 14px; font-size: 14px; display: flex; gap: 10px; align-items: center;
+}
+#setbar .who { display: inline-flex; gap: 4px; align-items: center; }
+#setbar .stars { color: var(--accent); letter-spacing: 1px; }
+#banner small { display: block; font-size: 0.42em; margin-top: 6px; opacity: 0.9; text-align: center; }
 #alive { position: absolute; top: 14px; left: 14px; list-style: none; margin: 0; padding: 10px; background: var(--panel); border-radius: 14px; display: flex; flex-direction: column; gap: 4px; }
 #alive li { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 #alive li.dead { opacity: 0.4; text-decoration: line-through; }

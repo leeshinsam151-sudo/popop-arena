@@ -4,7 +4,7 @@
 import {
   BASE_SPEED, CORNER_ASSIST, DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, ICE_DECEL, ITEM_CHANCE, ITEM_WEIGHTS,
   BUBBLE_SPEED_MUL, BUBBLE_TICKS, CONVEYOR_SPEED, RESCUE_SHIELD_TICKS, TOUCH_DIST,
-  ItemType, JUMP_DIST, JUMP_TIME, KICK_SPEED, LAVA_CYCLE, LAVA_ERUPT, LAVA_WARN, MAX_BOMBS, MAX_RANGE,
+  ItemType, JUMP_DIST, JUMP_TIME, ROUND_TICKS, SUDDEN_SAFE_H, SUDDEN_SAFE_W, SUDDEN_TICKS, KICK_SPEED, LAVA_CYCLE, LAVA_ERUPT, LAVA_WARN, MAX_BOMBS, MAX_RANGE,
   MAX_SPEED_LV, QUICKSAND_MUL, SOFT_DENSITY, SPEED_STEP, THROW_BOUNCE_TICKS, THROW_DIST, THROW_TICKS, Tile, DT,
 } from './constants.ts';
 import { MAP_ROWS, type MapId } from './maps.ts';
@@ -456,6 +456,8 @@ function rollItem(rand: () => number): ItemType {
 /** 이동 이후 세계를 한 틱 진행: 폭탄 비행·미끄러짐, 불길 소멸, 폭발(연쇄), 블록 파괴, 사망, 아이템 획득 */
 export function stepWorld(s: GameState, rand: () => number): void {
   s.tick++;
+  const drop = suddenDropAt(s.mapId, s.tick);
+  if (drop) dropWall(s, drop[0], drop[1]);
   s.flames = s.flames.filter((f) => --f.ttl > 0);
   for (const b of s.bombs) {
     if (b.fly > 0) { // 날아가는 동안에는 시간이 멈춤
@@ -494,7 +496,7 @@ export function stepWorld(s: GameState, rand: () => number): void {
         const x = b.x + dx * i, y = b.y + dy * i;
         if (x < 0 || y < 0 || x >= s.w || y >= s.h) break;
         const t = s.tiles[y * s.w + x];
-        if (t === Tile.Wall) break;
+        if (t === Tile.Wall || t === Tile.Fallen) break;
         addFlame(x, y);
         if (t === Tile.Soft || t === Tile.Frozen || t === Tile.Cracked) { broken.add(y * s.w + x); break; }
         const other = s.bombs.find((o) => o.fly === 0 && o.x === x && o.y === y && !exploded.has(o.id));
@@ -549,6 +551,60 @@ function resolveBubbles(s: GameState) {
     const members = s.players.filter((p) => p.team === team && p.alive);
     if (members.length && members.every((p) => p.trapped)) for (const p of members) { p.trapped = 0; p.alive = false; }
   }
+}
+
+const suddenCache = new Map<MapId, { cells: [number, number][]; interval: number; start: number }>();
+/**
+ * ⚠️ 서든데스 일정: 바깥 테두리부터 시계 방향 나선으로 안쪽까지, 떨어질 칸 순서와 간격(틱).
+ * 고정 벽 칸은 건너뛰고, 가운데 구역은 남김. 판 끝나기 5초 전에 다 떨어지도록 간격을 정함.
+ * 서버(판정)와 클라이언트(경고 표시)가 같은 일정을 계산한다.
+ */
+export function suddenSchedule(mapId: MapId) {
+  let sch = suddenCache.get(mapId);
+  if (sch) return sch;
+  const rows = MAP_ROWS[mapId];
+  const h = rows.length, w = rows[0].length;
+  const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
+  const cells: [number, number][] = [];
+  let x0 = 1, y0 = 1, x1 = w - 2, y1 = h - 2;
+  const add = (x: number, y: number) => {
+    if ('#TOW'.includes(rows[y][x])) return; // 원래 벽
+    if (Math.abs(x - cx) <= SUDDEN_SAFE_W && Math.abs(y - cy) <= SUDDEN_SAFE_H) return; // 끝까지 남는 곳
+    cells.push([x, y]);
+  };
+  while (x0 <= x1 && y0 <= y1) {
+    for (let x = x0; x <= x1; x++) add(x, y0);
+    for (let y = y0 + 1; y <= y1; y++) add(x1, y);
+    if (y1 > y0) for (let x = x1 - 1; x >= x0; x--) add(x, y1);
+    if (x1 > x0) for (let y = y1 - 1; y > y0; y--) add(x0, y);
+    x0++; y0++; x1--; y1--;
+  }
+  const start = ROUND_TICKS - SUDDEN_TICKS;
+  const interval = Math.max(1, Math.floor((SUDDEN_TICKS - 5 * 20) / Math.max(1, cells.length)));
+  sch = { cells, interval, start };
+  suddenCache.set(mapId, sch);
+  return sch;
+}
+
+/** 이번 틱에 떨어지는 칸 (없으면 null) */
+export function suddenDropAt(mapId: MapId, tick: number): [number, number] | null {
+  const { cells, interval, start } = suddenSchedule(mapId);
+  const k = tick - start;
+  if (k < 0 || k % interval !== 0) return null;
+  return cells[k / interval] ?? null;
+}
+
+/** ⚠️ 벽이 떨어져 그 칸의 사람·폭탄·아이템·불길이 사라짐 */
+function dropWall(s: GameState, x: number, y: number) {
+  s.tiles[y * s.w + x] = Tile.Fallen;
+  for (const p of s.players) {
+    if (!p.alive) continue;
+    const hit = (Math.round(p.x) === x && Math.round(p.y) === y) || (p.jump && p.jump.tx === x && p.jump.ty === y);
+    if (hit) { p.alive = false; p.trapped = 0; p.jump = null; }
+  }
+  s.bombs = s.bombs.filter((b) => !(b.x === x && b.y === y));
+  s.items = s.items.filter((it) => !(it.x === x && it.y === y));
+  s.flames = s.flames.filter((f) => !(f.x === x && f.y === y));
 }
 
 /** 시드 고정 난수 (테스트·맵 생성용) */

@@ -2,7 +2,8 @@
 import * as THREE from 'three';
 import { ItemType, Tile } from '../../shared/constants.ts';
 import { MAP_ROWS, type MapId } from '../../shared/maps.ts';
-import { lavaCracks, lavaState, type Bomb, type Flame, type Item } from '../../shared/sim.ts';
+import { lavaCracks, lavaState, suddenSchedule, type Bomb, type Flame, type Item } from '../../shared/sim.ts';
+import { SUDDEN_WARN } from '../../shared/constants.ts';
 
 interface Theme {
   fa: number; fb: number; sky: number;
@@ -101,6 +102,11 @@ export class Arena {
   private crackBits!: THREE.InstancedMesh;
   private iceDebrisMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.85 });
   private tick = 0;
+  /** ⚠️ 서든데스: 떨어진 벽(낙하 연출 포함)과 곧 떨어질 칸 경고 */
+  private fallen!: THREE.InstancedMesh;
+  private fallenCap!: THREE.InstancedMesh;
+  private fallenDrop = new Map<number, number>(); // 칸 → 떨어지기 시작한 시각(ms)
+  private warnTiles!: THREE.InstancedMesh;
   /** 🎢 벨트 위 화살표 (벨트 방향으로 흘러감) */
   private belts: { x: number; y: number; dx: number; dy: number }[] = [];
   private beltArrows!: THREE.InstancedMesh;
@@ -311,6 +317,12 @@ export class Arena {
     this.frozenCore = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ color: 0xc08a50, roughness: 0.8 }), n);
     this.crackBits = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ color: 0xd8f1ff, transparent: true, opacity: 0.8, roughness: 0.1 }), n * 3);
     for (const im of [this.frozenIce, this.frozenCore, this.crackBits]) { im.count = 0; im.castShadow = true; im.receiveShadow = true; this.statics.add(im); }
+    this.fallen = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ color: 0x4a4f5e, roughness: 0.7 }), n);
+    this.fallenCap = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ color: 0xffc531, roughness: 0.6 }), n);
+    this.warnTiles = new THREE.InstancedMesh(G.box, new THREE.MeshBasicMaterial({ color: 0xff3b30, transparent: true, opacity: 0.6, depthWrite: false }), 16);
+    for (const im of [this.fallen, this.fallenCap, this.warnTiles]) { im.count = 0; im.frustumCulled = false; this.statics.add(im); }
+    this.fallen.castShadow = this.fallenCap.castShadow = true;
+    this.fallenDrop.clear();
   }
 
   private spinRing(x: number, y: number, r: number, mat: THREE.Material, h = 0.01) {
@@ -341,11 +353,13 @@ export class Arena {
       } else if (t === Tile.Frozen) {
         put(this.frozenIce, fi++, x, 0.42, y, 0.88, 0.84, 0.88);
         put(this.frozenCore, ci++, x, 0.34, y, 0.46, 0.46, 0.46, 0.5);
+      } else if (t === Tile.Fallen) {
+        if (prev && was !== Tile.Fallen && !this.fallenDrop.has(idx)) this.fallenDrop.set(idx, performance.now());
       } else if (t === Tile.Cracked) {
         put(this.frozenCore, ci++, x, 0.36, y, 0.7, 0.72, 0.7, 0.2);
         for (let k = 0; k < 3; k++) put(this.crackBits, cb++, x + [-0.3, 0.28, 0.05][k], 0.2 + k * 0.22, y + [0.3, -0.25, 0.33][k], 0.22, 0.18, 0.2, k);
       }
-      if (prev && was !== t) {
+      if (prev && was !== t && t !== Tile.Fallen) {
         if (was === Tile.Frozen) this.spawnDebris(x, y, this.iceDebrisMat); // 얼음만 깨짐
         else if (was === Tile.Soft || was === Tile.Cracked) { this.spawnDebris(x, y, this.debrisMat); broken++; }
       }
@@ -358,7 +372,30 @@ export class Arena {
       im.instanceMatrix.needsUpdate = true;
       im.computeBoundingSphere(); im.computeBoundingBox();
     }
+    this.layoutFallen();
     if (broken && this.onBreak) this.onBreak(broken);
+  }
+
+  /** 떨어진 벽 배치 (막 떨어진 벽은 위에서 쿵 내려오는 중) */
+  private layoutFallen() {
+    if (!this.fallen) return;
+    const now = performance.now();
+    let k = 0;
+    for (let idx = 0; idx < this.tiles.length; idx++) {
+      if (Number(this.tiles[idx]) !== Tile.Fallen) continue;
+      const x = idx % this.w, y = Math.floor(idx / this.w);
+      const since = now - (this.fallenDrop.get(idx) ?? -1e9);
+      const fall = Math.max(0, 1 - since / 280);
+      const lift = fall * fall * 7;
+      dummy.rotation.set(0, 0, 0);
+      dummy.position.set(x, 0.5 + lift, y); dummy.scale.set(0.96, 1, 0.96); dummy.updateMatrix();
+      this.fallen.setMatrixAt(k, dummy.matrix);
+      dummy.position.set(x, 1.03 + lift, y); dummy.scale.set(0.98, 0.08, 0.98); dummy.updateMatrix();
+      this.fallenCap.setMatrixAt(k, dummy.matrix);
+      k++;
+    }
+    this.fallen.count = this.fallenCap.count = k;
+    this.fallen.instanceMatrix.needsUpdate = this.fallenCap.instanceMatrix.needsUpdate = true;
   }
 
   /** 서버 틱(소수 가능): 용암 균열 경고·분출 연출 기준 */
@@ -490,6 +527,28 @@ export class Arena {
     for (const w of this.wheels) {
       w.wheel.rotation.z = t * 0.25;
       for (const c of w.cabins) c.rotation.z = -w.wheel.rotation.z;
+    }
+    // ⚠️ 서든데스: 곧 떨어질 칸을 빨갛게 깜빡임, 떨어지는 중인 벽 애니메이션
+    if (this.mapId && this.warnTiles) {
+      const sd = suddenSchedule(this.mapId);
+      let wi = 0;
+      if (this.tick >= sd.start - SUDDEN_WARN) {
+        const from = Math.max(0, Math.ceil((this.tick - sd.start) / sd.interval));
+        for (let i = from; i < sd.cells.length && wi < 16; i++) {
+          const dropAt = sd.start + i * sd.interval;
+          if (dropAt - this.tick > SUDDEN_WARN) break;
+          const [x, y] = sd.cells[i];
+          dummy.rotation.set(0, 0, 0);
+          dummy.position.set(x, 0.02, y); dummy.scale.set(0.96, 0.02, 0.96); dummy.updateMatrix();
+          this.warnTiles.setMatrixAt(wi++, dummy.matrix);
+        }
+      }
+      this.warnTiles.count = wi;
+      this.warnTiles.instanceMatrix.needsUpdate = true;
+      (this.warnTiles.material as THREE.MeshBasicMaterial).opacity = 0.35 + Math.abs(Math.sin(t * 14)) * 0.45;
+      const now = performance.now();
+      for (const [idx, at] of this.fallenDrop) if (now - at > 400) this.fallenDrop.delete(idx);
+      if (this.fallenDrop.size) this.layoutFallen();
     }
     for (const m of this.mushrooms.values()) {
       if (m.squash <= 0) continue;

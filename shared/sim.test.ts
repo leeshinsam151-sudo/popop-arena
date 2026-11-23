@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { DT, Dir, FUSE_TICKS, JUMP_TIME, Tile } from './constants.ts';
+import { DT, Dir, FUSE_TICKS, JUMP_TIME, ROUND_TICKS, Tile } from './constants.ts';
 import { MAP_ROWS, type MapId } from './maps.ts';
-import { bombAction, createGame, lavaCracks, seededRandom, lavaState, movePlayer, placeBomb, stepWorld, throwBomb, updatePassers, type GameState, type PlayerState } from './sim.ts';
+import { bombAction, createGame, isBlocked, lavaCracks, seededRandom, suddenSchedule, lavaState, movePlayer, placeBomb, stepWorld, throwBomb, updatePassers, type GameState, type PlayerState } from './sim.ts';
 
 const noRand = () => 0.99; // 랜덤 블록 없음, 아이템 없음
 
@@ -328,4 +328,31 @@ test('🤸 트램펄린: 버섯처럼 2칸 점프', () => {
   assert.ok(p.jump);
   press(s, p, Dir.None, Math.ceil(JUMP_TIME / DT) + 1);
   assert.deepEqual([p.x, p.y], [5, 3]);
+});
+
+// ---------- 서든데스 ⚠️ ----------
+test('⚠️ 서든데스 일정: 바깥부터 떨어지고, 가운데는 남고, 판 끝나기 전에 끝난다', () => {
+  for (const mapId of ['glacier', 'volcano', 'forest', 'desert', 'park'] as const) {
+    const { cells, interval, start } = suddenSchedule(mapId);
+    assert.ok(cells.length > 50, `${mapId}: ${cells.length} cells`);
+    assert.ok(start + interval * cells.length <= ROUND_TICKS - 4 * 20, `${mapId}: finishes before the round ends`);
+    const [fx, fy] = cells[0];
+    assert.ok(fx === 1 || fy === 1, 'starts at the outer ring');
+    assert.ok(!cells.some(([x, y]) => x === 9 && y === 7), 'center never falls');
+  }
+});
+
+test('⚠️ 서든데스: 떨어진 칸은 벽이 되고 그 위 사람은 탈락, 가운데는 살아남는다', () => {
+  const s = createGame('glacier', ['p0', 'p1'], noRand, [0, 1]); // 팀전이어도 바로 탈락
+  const [corner, center] = s.players;
+  corner.x = 1; corner.y = 1;
+  center.x = 9; center.y = 7;
+  const { cells, start, interval } = suddenSchedule('glacier');
+  s.tick = start - 1;
+  for (let i = 0; i < cells.length * interval + 2; i++) stepWorld(s, noRand);
+  assert.equal(corner.alive, false);
+  assert.equal(corner.trapped, 0, 'no bubble: crushed');
+  assert.ok(center.alive);
+  for (const [x, y] of cells) assert.equal(s.tiles[y * s.w + x], Tile.Fallen);
+  assert.ok(isBlocked(s, 1, 1, 'p1'));
 });

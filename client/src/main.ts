@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import './style.css';
-import { BUBBLE_TICKS, CHARACTERS, DT, Dir, MAX_PLAYERS, SANDSTORM_PERIOD, SANDSTORM_TICKS, TEAM_COLORS, TEAM_NAMES, TICK_RATE } from '../../shared/constants.ts';
+import { BUBBLE_TICKS, CHARACTERS, DT, Dir, MAX_PLAYERS, SANDSTORM_PERIOD, SANDSTORM_TICKS, SUDDEN_TICKS, TEAM_COLORS, TEAM_NAMES, TICK_RATE } from '../../shared/constants.ts';
 import { MAP_IDS, MAP_NAMES, type MapId } from '../../shared/maps.ts';
 import type { MetaPlayer, ServerMsg } from '../../shared/protocol.ts';
 import { featureAt, spawnOrder, teamSpawns, movePlayer, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
@@ -178,7 +178,7 @@ function onMeta(m: Meta) {
   if (m.phase === 'ended' && prev === 'playing' && m.result) {
     const myTeam = metaPlayer(myId)?.team ?? -1;
     const won = m.result.team !== undefined ? m.result.team === myTeam : m.result.winner === myId;
-    audio.play(won ? 'win' : 'lose');
+    audio.play(m.result.final && m.target > 1 && (m.result.winner || m.result.team !== undefined) ? 'champion' : won ? 'win' : 'lose');
   }
   if (m.phase === 'lobby') audio.setMusic('lobby');
   if (m.phase === 'playing' && prev !== 'playing') {
@@ -347,6 +347,20 @@ function snapEvents(prev: Snap, cur: Snap) {
       if ((p.kick && !pp.kick) || (p.glove && !pp.glove)) audio.play('power');
       else if (p.bombMax > pp.bombMax || p.range > pp.range || p.speedLv > pp.speedLv) audio.play('pickup');
     }
+  }
+  // ⚠️ 서든데스 시작: 경보, 배경음 빨라짐
+  if (prev.timeLeft > SUDDEN_TICKS && cur.timeLeft <= SUDDEN_TICKS) {
+    audio.play('siren');
+    audio.setTempo(1.25);
+    toast('⚠️ 서든데스! 바깥부터 벽이 떨어져요. 가운데로!');
+  }
+  // 근처에 벽이 쿵
+  for (let i = 0; i < cur.tiles.length; i++) {
+    if (cur.tiles[i] !== '6' || prev.tiles[i] === '6') continue;
+    const x = i % arena.w, y = Math.floor(i / arena.w);
+    const d = Math.hypot(x - listener.x, y - listener.y);
+    if (d < 9) { sfxAt('thud', x, y, 0.7); shake = Math.max(shake, 0.12 * (1 - d / 9)); }
+    break;
   }
   // 남은 10초 카운트다운
   const sec = Math.ceil(cur.timeLeft / TICK_RATE);
@@ -604,6 +618,9 @@ $('bot-plus').onclick = () => meta && net.send({ t: 'bots', n: meta.bots + 1 });
 $('mode-seg').querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
   b.onclick = () => net.send({ t: 'mode', mode: b.dataset.mode as 'solo' | 'team' });
 });
+$('sets-seg').querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+  b.onclick = () => net.send({ t: 'sets', n: Number(b.dataset.sets) });
+});
 $('team-pick').querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
   b.onclick = () => net.send({ t: 'team', team: Number(b.dataset.team) });
 });
@@ -689,6 +706,10 @@ function renderUI() {
   $('mode-hint').textContent = m.mode === 'team'
     ? '🫧 맞으면 물방울에 갇혀요. 같은 팀이 닿으면 구출, 상대가 닿거나 5초가 지나면 탈락!'
     : teamOk ? '' : '팀전은 사람과 봇을 합쳐 4명 또는 6명일 때 고를 수 있어요';
+  $('sets-seg').querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+    b.classList.toggle('on', Number(b.dataset.sets) === m.target);
+    b.disabled = !isHost;
+  });
   const teamPick = $('team-pick');
   teamPick.classList.toggle('hidden', m.mode !== 'team');
   teamPick.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
@@ -733,12 +754,20 @@ function renderUI() {
     : m.mode === 'team' && teamSize[0] !== teamSize[1] ? `⚠️ 팀 인원을 맞춰 주세요 (A팀 ${teamSize[0]} : B팀 ${teamSize[1]})`
     : total === 1 ? '혼자서도 연습할 수 있어요. 🤖 봇을 넣거나 초대 링크로 팀원을 불러 보세요!' : '';
 
+  renderSetBar(m);
   const banner = $('banner');
   if (m.phase === 'ended' && m.result) {
     const w = m.result.winner ? metaPlayer(m.result.winner) : undefined;
     const team = m.result.team;
-    banner.textContent = team !== undefined ? `🎉 ${TEAM_NAMES[team]} 승리!`
-      : w ? `🎉 ${w.name} 승리!` : (m.players.filter((p) => p.playing).length <= 1 ? '💥 게임 오버' : '🤝 무승부!');
+    const who = team !== undefined ? TEAM_NAMES[team] : w?.name;
+    const finalSet = m.result.final && m.target > 1 && who;
+    banner.textContent = finalSet ? `🏆 ${who} 최종 우승!`
+      : who ? `🎉 ${who} 승리!` : (m.players.filter((p) => p.playing).length <= 1 ? '💥 게임 오버' : '🤝 무승부!');
+    if (m.target > 1 && !m.result.final) {
+      const small = document.createElement('small');
+      small.textContent = `${m.round}라운드 끝 · 곧 다음 판이 시작돼요`;
+      banner.append(small);
+    }
     banner.style.color = team !== undefined ? hex(TEAM_COLORS[team]) : '';
     banner.classList.remove('hidden');
   } else {
@@ -746,11 +775,40 @@ function renderUI() {
   }
 }
 
+/** 🏆 세트 점수 바: "2승 먼저 · 3라운드 | A팀 ★ : ★★ B팀" */
+function renderSetBar(m: Meta) {
+  const bar = $('setbar');
+  const show = m.target > 1 && m.phase !== 'lobby';
+  bar.classList.toggle('hidden', !show);
+  if (!show) return;
+  bar.innerHTML = '';
+  const head = document.createElement('span');
+  head.textContent = `🏆 ${m.target}승 먼저 · ${m.round}라운드`;
+  bar.append(head);
+  const stars = (n: number) => '★'.repeat(n) + '☆'.repeat(Math.max(0, m.target - n));
+  const entries = m.mode === 'team'
+    ? [0, 1].map((t) => ({ name: TEAM_NAMES[t], color: TEAM_COLORS[t], n: m.score[`team${t}`] ?? 0 }))
+    : m.players.filter((p) => p.playing).map((p) => ({ name: p.name, color: CHARACTERS[p.char].color, n: m.score[p.id] ?? 0 }));
+  for (const e of entries) {
+    const span = document.createElement('span');
+    span.className = 'who';
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = hex(e.color);
+    const st = document.createElement('span');
+    st.className = 'stars';
+    st.textContent = stars(e.n);
+    span.append(dot, e.name, st);
+    bar.append(span);
+  }
+}
+
 function updateHud(s: Snap) {
   const sec = Math.max(0, Math.ceil(s.timeLeft / TICK_RATE));
   const timer = $('timer');
-  timer.textContent = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
-  timer.classList.toggle('warn', sec <= 30);
+  const sudden = s.timeLeft <= SUDDEN_TICKS;
+  timer.textContent = `${sudden ? '⚠️ 서든데스 ' : ''}${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  timer.classList.toggle('sudden', sudden);
 
   const ul = $('alive');
   const sig = s.players.map((p) => p.id + p.alive + !!p.trapped).join();

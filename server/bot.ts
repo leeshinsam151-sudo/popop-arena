@@ -6,7 +6,7 @@
 //  3. 안전하면 → 목표(아이템, 부술 블록 옆, 적, 갇힌 아군 구출·적 터뜨리기)를 점수로 골라 이동
 //  4. 폭탄을 놓으면 득이 있고 + 놓은 뒤에도 피할 길이 있을 때만 폭탄
 import { CONVEYOR_SPEED, DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, LAVA_CYCLE, LAVA_WARN, QUICKSAND_MUL, TICK_RATE, Tile } from '../shared/constants.ts';
-import { beltAt, featureAt, isBlocked, lavaCracks, playerSpeed, type GameState, type PlayerState } from '../shared/sim.ts';
+import { beltAt, featureAt, isBlocked, lavaCracks, playerSpeed, suddenDropAt, suddenSchedule, type GameState, type PlayerState } from '../shared/sim.ts';
 
 const SAFE = Infinity;
 
@@ -51,7 +51,7 @@ function dangerMap(s: GameState, extra?: { x: number; y: number; range: number }
         const x = b.x + dx * i, y = b.y + dy * i;
         if (x < 0 || y < 0 || x >= s.w || y >= s.h) break;
         const t = s.tiles[y * s.w + x];
-        if (t === Tile.Wall) break;
+        if (t === Tile.Wall || t === Tile.Fallen) break;
         cells.push(y * s.w + x);
         if (t === Tile.Soft || t === Tile.Frozen || t === Tile.Cracked) break;
         if (bombs.some((o) => o !== b && !o.parent && o.x === x && o.y === y)) break;
@@ -71,6 +71,15 @@ function dangerMap(s: GameState, extra?: { x: number; y: number; range: number }
   }
   for (const b of bombs) if (b.parent) b.t = b.parent.t; // 예상 위치는 진짜 폭탄과 같은 시각에 터짐
   bombs.forEach((b, i) => { for (const c of blasts[i]) danger[c] = Math.min(danger[c], b.t); });
+
+  // ⚠️ 서든데스: 곧 벽이 떨어질 칸 (2초 앞까지)
+  const sd = suddenSchedule(s.mapId);
+  if (s.tick + 40 >= sd.start) {
+    for (let k = 0; k <= 40; k++) {
+      const cell = suddenDropAt(s.mapId, s.tick + k);
+      if (cell) danger[cell[1] * s.w + cell[0]] = Math.min(danger[cell[1] * s.w + cell[0]], k);
+    }
+  }
 
   // 🌋 곧 분출할 용암 균열
   for (const [x, y, off] of lavaCracks(s.mapId)) {
@@ -128,7 +137,7 @@ function bombValue(s: GameState, me: PlayerState, x: number, y: number): number 
     for (let i = 1; i <= me.range; i++) {
       const cx = x + dx * i, cy = y + dy * i;
       const t = s.tiles[cy * s.w + cx];
-      if (t === undefined || t === Tile.Wall) break;
+      if (t === undefined || t === Tile.Wall || t === Tile.Fallen) break;
       if (t === Tile.Soft || t === Tile.Frozen || t === Tile.Cracked) { v += 1; break; }
       for (const p of s.players) {
         if (!p.alive || p === me || Math.round(p.x) !== cx || Math.round(p.y) !== cy) continue;
@@ -154,6 +163,7 @@ export function botThink(s: GameState, me: PlayerState, mind: BotMind): { dir: D
   }
   if (me.trapped) return { dir: Dir.None, bomb: false };
 
+  const sd = suddenSchedule(s.mapId);
   // 3) 안전한 칸으로만 다니며 갈 수 있는 곳 탐색
   const nodes = bfs(s, me, (idx) => danger[idx] === SAFE);
   const myBombs = s.bombs.filter((b) => b.owner === me.id).length;
@@ -176,6 +186,9 @@ export function botThink(s: GameState, me: PlayerState, mind: BotMind): { dir: D
     if (n.dist === 0) continue;
     const x = n.idx % s.w, y = Math.floor(n.idx / s.w);
     let score = -n.dist;
+    if (s.tick >= sd.start - 100) { // ⚠️ 서든데스 직전부터는 가운데로 모이기
+      score -= (Math.abs(x - (s.w - 1) / 2) + Math.abs(y - (s.h - 1) / 2)) * 1.5;
+    }
     if (beltAt(s.mapId, x, y) !== Dir.None) score -= 3; // 벨트 위에 서 있으면 엉뚱한 데로 실려 감
     if (s.items.some((it) => it.x === x && it.y === y)) score += 14;
     if (canBomb) score += Math.max(0, bombValue(s, me, x, y)) * 4;

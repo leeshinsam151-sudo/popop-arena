@@ -18,6 +18,7 @@ export type ClientMsg =
   | { t: 'bots'; n: number } // 방장: AI 봇 수
   | { t: 'mode'; mode: Mode } // 방장: 개인전/팀전
   | { t: 'team'; team: number } // 내 팀 바꾸기 (0/1)
+  | { t: 'sets'; n: number } // 방장: 세트제 (먼저 n승 하면 우승: 1, 2, 3)
   | { t: 'ping'; c: number }; // 왕복 시간 측정 (c = 클라이언트 시각)
 
 export interface MetaPlayer {
@@ -41,7 +42,11 @@ export type ServerMsg =
       players: MetaPlayer[]; // 사람 + 봇 (봇은 bot: true)
       mode: Mode;
       bots: number; // 방장이 정한 봇 수
-      result?: { winner: string | null; team?: number }; // phase === 'ended'일 때. 둘 다 없으면 무승부
+      target: number; // 🏆 세트제: 먼저 이 승수를 채우면 최종 우승 (1이면 한 판)
+      round: number; // 이번 세트의 몇 번째 판인지
+      score: Record<string, number>; // 세트 점수: 개인전은 플레이어 id, 팀전은 'team0'/'team1'
+      // phase === 'ended'일 때. winner·team 둘 다 없으면 무승부, final이면 세트 끝(최종 우승 발표)
+      result?: { winner: string | null; team?: number; final?: boolean };
     }
   | {
       t: 's';
