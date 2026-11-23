@@ -226,6 +226,9 @@ export class Arena {
     }
     this.softBody.count = this.softBand.count = i;
     this.softBody.instanceMatrix.needsUpdate = this.softBand.instanceMatrix.needsUpdate = true;
+    // 화면 밖 판정(frustum culling)에 쓰는 범위를 다시 계산. 안 하면 상자 0개일 때 계산된
+    // 빈 범위가 남아서, 상자가 화면 안에 있어도 통째로 그려지지 않는다.
+    for (const im of [this.softBody, this.softBand]) { im.computeBoundingSphere(); im.computeBoundingBox(); }
     if (broken && this.onBreak) this.onBreak(broken);
   }
 
