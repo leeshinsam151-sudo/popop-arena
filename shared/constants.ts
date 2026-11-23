@@ -46,6 +46,14 @@ export const JUMP_DIST = 2; // 버섯 점프 거리(칸)
 export const SANDSTORM_PERIOD = 45 * TICK_RATE; // 🌪️ 모래폭풍 주기 (연출만)
 export const SANDSTORM_TICKS = 8 * TICK_RATE;
 
+// ---------- 팀전 ----------
+export const BUBBLE_TICKS = 5 * TICK_RATE; // 🫧 물방울에 갇혀 있는 시간 (지나면 탈락)
+export const BUBBLE_SPEED_MUL = 0.3; // 갇힌 동안 이동 속도 배율
+export const RESCUE_SHIELD_TICKS = TICK_RATE; // 구출 직후 다시 안 갇히는 시간
+export const TOUCH_DIST = 0.75; // 구출·터뜨리기 접촉 거리 (칸)
+export const TEAM_NAMES = ['A팀', 'B팀'] as const;
+export const TEAM_COLORS = [0xff7a45, 0x3fa9ff] as const; // 주황, 하늘
+
 export enum Dir {
   None = 0,
   Up = 1,

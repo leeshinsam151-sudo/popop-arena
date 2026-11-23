@@ -4,7 +4,7 @@ import type { MapId } from '../../shared/maps.ts';
 
 export type Sfx =
   | 'place' | 'explode' | 'pickup' | 'power' | 'kick' | 'throw' | 'land' | 'death'
-  | 'warp' | 'boing' | 'lava' | 'crack' | 'tick' | 'start' | 'win' | 'lose';
+  | 'warp' | 'boing' | 'lava' | 'crack' | 'tick' | 'start' | 'win' | 'lose' | 'trap' | 'rescue';
 export type MusicId = MapId | 'lobby';
 
 const load = (k: string) => { try { return localStorage.getItem(k) !== '0'; } catch { return true; } };
@@ -212,6 +212,13 @@ export class GameAudio {
       case 'crack':
         this.hiss(o, 0.16, 'highpass', 4200, 4200, 0.45);
         this.tone(o, 2500, 1800, 0.09, 'triangle', 0.15);
+        break;
+      case 'trap': // 🫧 물방울에 갇힘: 보글보글
+        for (let i = 0; i < 4; i++) this.tone(o, 400 + i * 90, 900 + i * 160, 0.09, 'sine', 0.3, i * 0.06);
+        break;
+      case 'rescue': // 🫧 구출: 물방울이 톡 터지며 반짝
+        this.hiss(o, 0.06, 'highpass', 2500, 2500, 0.35);
+        this.notes(o, [880, 1175, 1568], 0.06, 0.07, 'triangle', 0.32);
         break;
       case 'tick':
         this.tone(o, 1250, 1250, 0.06, 'square', 0.12);

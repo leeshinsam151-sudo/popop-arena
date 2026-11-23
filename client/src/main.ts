@@ -1,9 +1,9 @@
 import * as THREE from 'three';
 import './style.css';
-import { CHARACTERS, DT, Dir, MAX_PLAYERS, SANDSTORM_PERIOD, SANDSTORM_TICKS, TICK_RATE } from '../../shared/constants.ts';
+import { BUBBLE_TICKS, CHARACTERS, DT, Dir, MAX_PLAYERS, SANDSTORM_PERIOD, SANDSTORM_TICKS, TEAM_COLORS, TEAM_NAMES, TICK_RATE } from '../../shared/constants.ts';
 import { MAP_IDS, MAP_NAMES, type MapId } from '../../shared/maps.ts';
 import type { MetaPlayer, ServerMsg } from '../../shared/protocol.ts';
-import { featureAt, spawnOrder, movePlayer, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
+import { featureAt, spawnOrder, teamSpawns, movePlayer, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
 import { Arena } from './arena.ts';
 import { createCharacter, type CharacterModel } from './characters.ts';
 import { Input } from './input.ts';
@@ -86,7 +86,7 @@ let lastFlames = 0;
 let hadKick = false;
 let hadGlove = false;
 
-interface Avatar { model: CharacterModel; char: number; name: string; last: { x: number; y: number }; dead: boolean; label: THREE.Sprite }
+interface Avatar { model: CharacterModel; char: number; name: string; team: number; last: { x: number; y: number }; dead: boolean; label: THREE.Sprite; trapped: number }
 const avatars = new Map<string, Avatar>();
 
 function nameSprite(text: string, color: number) {
@@ -108,15 +108,18 @@ function nameSprite(text: string, color: number) {
   return s;
 }
 
-function avatarFor(id: string, char: number, name: string): Avatar {
+function avatarFor(id: string, char: number, name: string, team = -1): Avatar {
   let a = avatars.get(id);
-  if (a && (a.char !== char || a.name !== name)) { removeAvatar(id); a = undefined; }
+  if (a && (a.char !== char || a.name !== name || a.team !== team)) { removeAvatar(id); a = undefined; }
   if (!a) {
     const model = createCharacter(char);
-    const label = nameSprite(name, CHARACTERS[char].color);
+    // 팀전이면 발밑 링과 이름표 점을 팀 색으로
+    const color = team >= 0 ? TEAM_COLORS[team] : CHARACTERS[char].color;
+    const label = nameSprite(name, color);
+    model.setRingColor(color);
     model.root.add(label);
     scene.add(model.root);
-    a = { model, char, name, last: { x: 0, y: 0 }, dead: false, label };
+    a = { model, char, name, team, last: { x: 0, y: 0 }, dead: false, label, trapped: 0 };
     avatars.set(id, a);
   }
   return a;
@@ -173,7 +176,9 @@ function onMeta(m: Meta) {
     lastSec = -1;
   }
   if (m.phase === 'ended' && prev === 'playing' && m.result) {
-    audio.play(m.result.winner === myId ? 'win' : 'lose');
+    const myTeam = metaPlayer(myId)?.team ?? -1;
+    const won = m.result.team !== undefined ? m.result.team === myTeam : m.result.winner === myId;
+    audio.play(won ? 'win' : 'lose');
   }
   if (m.phase === 'lobby') audio.setMusic('lobby');
   if (m.phase === 'playing' && prev !== 'playing') {
@@ -197,10 +202,14 @@ function showLobbyScene() {
   }
   const lobbyIds = new Set<string>();
   const spawns = spawnOrder(arena.w, arena.h);
-  meta.players.slice(0, MAX_PLAYERS).forEach((p, i) => {
+  const tSpawns = teamSpawns(arena.w, arena.h);
+  const teamCount = [0, 0];
+  // 이번 판 참가자: 사람 앞 6명 + 봇 (서버와 같은 순서)
+  const humans = meta.players.filter((p) => !p.bot).slice(0, MAX_PLAYERS);
+  [...humans, ...meta.players.filter((p) => p.bot)].slice(0, MAX_PLAYERS).forEach((p, i) => {
     lobbyIds.add(p.id);
-    const a = avatarFor(p.id, p.char, p.name);
-    const [x, y] = spawns[i];
+    const a = avatarFor(p.id, p.char, p.name, p.team);
+    const [x, y] = p.team >= 0 ? tSpawns[p.team][teamCount[p.team]++] ?? spawns[i] : spawns[i];
     a.model.root.position.set(x, 0, y);
     a.model.root.rotation.y = 0;
     a.last = { x, y };
@@ -327,6 +336,8 @@ function snapEvents(prev: Snap, cur: Snap) {
     const pp = prev.players.find((q) => q.id === p.id);
     if (!pp) continue;
     if (pp.alive && !p.alive) sfxAt('death', p.x, p.y, p.id === myId ? 1.2 : 0.9);
+    if (!pp.trapped && p.trapped) sfxAt('trap', p.x, p.y, p.id === myId ? 1.2 : 0.9); // 🫧 갇힘
+    if (pp.trapped && !p.trapped && p.alive) sfxAt('rescue', p.x, p.y); // 구출
     if (!pp.jump && p.jump) {
       arena.bounceMushroom(Math.round(p.jump.sx), Math.round(p.jump.sy));
       sfxAt('boing', p.jump.sx, p.jump.sy);
@@ -396,7 +407,7 @@ function render(now: number, dt: number, alpha: number) {
     for (const p of latest.players) {
       ids.add(p.id);
       const mp = metaPlayer(p.id);
-      const av = avatarFor(p.id, mp?.char ?? p.slot % CHARACTERS.length, mp?.name ?? '???');
+      const av = avatarFor(p.id, mp?.char ?? p.slot % CHARACTERS.length, mp?.name ?? '???', p.team);
       let x: number, y: number, h = 0;
       if (p.id === myId && pred) {
         const pv = previewMe(alpha);
@@ -435,7 +446,9 @@ function render(now: number, dt: number, alpha: number) {
       av.model.setOpacity(inBush ? (p.id === myId ? 0.5 : 0.12) : 1);
       if (p.alive) av.label.visible = !inBush || p.id === myId;
       if (!p.alive && !av.dead) { av.dead = true; av.model.die(); av.label.visible = false; }
-      av.model.animate(t, dt, moving && p.alive);
+      av.model.animate(t, dt, moving && p.alive && !p.trapped);
+      // 🫧 물방울: 서버가 알려 준 남은 시간 기준
+      av.model.setBubble(p.alive && p.trapped ? p.trapped / BUBBLE_TICKS : 0, t);
       if (p.id === myId && p.alive) focus = { x, y };
     }
     for (const id of [...avatars.keys()]) if (!ids.has(id)) removeAvatar(id);
@@ -585,6 +598,14 @@ $('copy-btn').onclick = async () => {
   }
 };
 $('start-btn').onclick = () => net.send({ t: 'start' });
+$('bot-minus').onclick = () => meta && net.send({ t: 'bots', n: meta.bots - 1 });
+$('bot-plus').onclick = () => meta && net.send({ t: 'bots', n: meta.bots + 1 });
+$('mode-seg').querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+  b.onclick = () => net.send({ t: 'mode', mode: b.dataset.mode as 'solo' | 'team' });
+});
+$('team-pick').querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+  b.onclick = () => net.send({ t: 'team', team: Number(b.dataset.team) });
+});
 
 // 🔊 효과음 / 🎵 배경음 켜고 끄기 (브라우저에 기억)
 const sfxBtn = $<HTMLButtonElement>('sfx-btn'), musicBtn = $<HTMLButtonElement>('music-btn');
@@ -623,26 +644,57 @@ function renderUI() {
   $('lobby').classList.toggle('hidden', m.phase !== 'lobby');
   $('hud').classList.toggle('hidden', m.phase === 'lobby');
 
-  // 플레이어 목록
+  // 플레이어 목록 (사람 → 봇 순, 팀전이면 팀 표시)
   const ul = $('players');
   ul.innerHTML = '';
-  m.players.forEach((p, i) => {
+  const humans = m.players.filter((p) => !p.bot);
+  const bots = m.players.filter((p) => p.bot);
+  [...humans, ...bots].forEach((p) => {
     const li = document.createElement('li');
     const dot = document.createElement('span');
     dot.className = 'dot';
     dot.style.background = hex(CHARACTERS[p.char].color);
     const name = document.createElement('span');
     name.className = 'name';
-    name.textContent = (p.id === m.host ? '👑 ' : '') + p.name + (p.id === myId ? ' (나)' : '') + (i >= MAX_PLAYERS ? ' · 관전' : '');
+    const spectator = !p.bot && humans.indexOf(p) >= MAX_PLAYERS;
+    name.textContent = (p.id === m.host ? '👑 ' : '') + (p.bot ? '🤖 ' : '') + p.name + (p.id === myId ? ' (나)' : '') + (spectator ? ' · 관전' : '');
+    li.append(dot, name);
+    if (p.team >= 0) {
+      const badge = document.createElement('span');
+      badge.className = `badge t${p.team}`;
+      badge.textContent = TEAM_NAMES[p.team];
+      li.append(badge);
+    }
     const wins = document.createElement('span');
     wins.className = 'wins';
     wins.textContent = p.wins ? `${p.wins}승` : '';
-    li.append(dot, name, wins);
+    li.append(wins);
     ul.append(li);
   });
-  $('count').textContent = `${Math.min(m.players.length, MAX_PLAYERS)}/${MAX_PLAYERS}`;
+  const total = Math.min(humans.length, MAX_PLAYERS) + bots.length;
+  $('count').textContent = `${total}/${MAX_PLAYERS}`;
 
-  const taken = new Set(m.players.filter((p) => p.id !== myId).map((p) => p.char));
+  // 🤖 봇 수 (방장만 조절)
+  $('bot-count').textContent = String(m.bots);
+  const botMax = MAX_PLAYERS - Math.min(humans.length, MAX_PLAYERS);
+  $<HTMLButtonElement>('bot-minus').disabled = !isHost || m.bots <= 0;
+  $<HTMLButtonElement>('bot-plus').disabled = !isHost || m.bots >= botMax;
+  // 개인전 / 팀전 (팀전은 총 4명 또는 6명일 때)
+  const teamOk = total >= 4 && total % 2 === 0;
+  $('mode-seg').querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.mode === m.mode);
+    b.disabled = !isHost || (b.dataset.mode === 'team' && !teamOk);
+  });
+  $('mode-hint').textContent = m.mode === 'team'
+    ? '🫧 맞으면 물방울에 갇혀요. 같은 팀이 닿으면 구출, 상대가 닿거나 5초가 지나면 탈락!'
+    : teamOk ? '' : '팀전은 사람과 봇을 합쳐 4명 또는 6명일 때 고를 수 있어요';
+  const teamPick = $('team-pick');
+  teamPick.classList.toggle('hidden', m.mode !== 'team');
+  teamPick.querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
+    b.className = `team-${b.dataset.team}` + (Number(b.dataset.team) === me?.team ? ' on' : '');
+  });
+
+  const taken = new Set(m.players.filter((p) => p.id !== myId && !p.bot).map((p) => p.char));
   charCards($('lobby-chars'), myChar, taken, (i) => net.send({ t: 'char', char: i }));
 
   const maps = $('maps');
@@ -675,14 +727,18 @@ function renderUI() {
   $('map-desc').textContent = m.pick === 'random' ? '🎲 게임을 시작할 때 4개 맵 중 하나가 무작위로 골라져요' : MAP_DESC[m.pick];
   $('map-hint').textContent = isHost ? '· 눌러서 선택' : '· 방장이 선택해요';
   $('start-btn').classList.toggle('hidden', !isHost);
-  $('wait-msg').textContent = isHost
-    ? (m.players.length === 1 ? '혼자서도 연습할 수 있어요. 초대 링크로 팀원을 불러 보세요!' : '')
-    : '방장이 게임을 시작하기를 기다리는 중…';
+  const teamSize = [0, 1].map((t) => m.players.filter((p) => p.team === t && (p.bot || humans.indexOf(p) < MAX_PLAYERS)).length);
+  $('wait-msg').textContent = !isHost ? '방장이 게임을 시작하기를 기다리는 중…'
+    : m.mode === 'team' && teamSize[0] !== teamSize[1] ? `⚠️ 팀 인원을 맞춰 주세요 (A팀 ${teamSize[0]} : B팀 ${teamSize[1]})`
+    : total === 1 ? '혼자서도 연습할 수 있어요. 🤖 봇을 넣거나 초대 링크로 팀원을 불러 보세요!' : '';
 
   const banner = $('banner');
   if (m.phase === 'ended' && m.result) {
     const w = m.result.winner ? metaPlayer(m.result.winner) : undefined;
-    banner.textContent = w ? `🎉 ${w.name} 승리!` : (m.players.filter((p) => p.playing).length <= 1 ? '💥 게임 오버' : '🤝 무승부!');
+    const team = m.result.team;
+    banner.textContent = team !== undefined ? `🎉 ${TEAM_NAMES[team]} 승리!`
+      : w ? `🎉 ${w.name} 승리!` : (m.players.filter((p) => p.playing).length <= 1 ? '💥 게임 오버' : '🤝 무승부!');
+    banner.style.color = team !== undefined ? hex(TEAM_COLORS[team]) : '';
     banner.classList.remove('hidden');
   } else {
     banner.classList.add('hidden');
@@ -696,18 +752,27 @@ function updateHud(s: Snap) {
   timer.classList.toggle('warn', sec <= 30);
 
   const ul = $('alive');
-  const sig = s.players.map((p) => p.id + p.alive).join();
+  const sig = s.players.map((p) => p.id + p.alive + !!p.trapped).join();
   if (ul.dataset.sig !== sig) {
     ul.dataset.sig = sig;
     ul.innerHTML = '';
-    for (const p of s.players) {
+    // 팀전이면 팀별로 묶어서
+    const list = [...s.players].sort((a, b) => a.team - b.team);
+    for (const p of list) {
       const mp = metaPlayer(p.id);
       const li = document.createElement('li');
-      li.className = p.alive ? '' : 'dead';
+      li.className = !p.alive ? 'dead' : p.trapped ? 'trapped' : '';
       const dot = document.createElement('span');
       dot.className = 'dot';
       dot.style.background = hex(CHARACTERS[mp?.char ?? 0].color);
-      li.append(dot, (mp?.name ?? '???') + (p.id === myId ? ' (나)' : ''));
+      li.append(dot);
+      if (p.team >= 0) {
+        const badge = document.createElement('span');
+        badge.className = `badge t${p.team}`;
+        badge.textContent = TEAM_NAMES[p.team][0];
+        li.append(badge);
+      }
+      li.append((mp?.bot ? '🤖 ' : '') + (mp?.name ?? '???') + (p.id === myId ? ' (나)' : '') + (p.alive && p.trapped ? ' 🫧' : ''));
       ul.append(li);
     }
   }
@@ -715,9 +780,9 @@ function updateHud(s: Snap) {
   const stats = $('mystats');
   stats.classList.toggle('hidden', !me);
   if (me) {
-    stats.textContent = me.alive
-      ? `💣 ${me.bombMax}   🔥 ${me.range}   👟 ${me.speedLv + 1}${me.kick ? '   ⚽' : ''}${me.glove ? '   🧤' : ''}`
-      : '👻 관전 중';
+    stats.textContent = !me.alive ? '👻 관전 중'
+      : me.trapped ? `🫧 갇혔어요! 같은 팀이 구해 줄 때까지 ${Math.ceil(me.trapped / TICK_RATE)}초`
+      : `💣 ${me.bombMax}   🔥 ${me.range}   👟 ${me.speedLv + 1}${me.kick ? '   ⚽' : ''}${me.glove ? '   🧤' : ''}`;
     // 특수 아이템을 처음 얻으면 사용법 안내
     if (me.kick && !hadKick) toast('⚽ 축구화! 폭탄 쪽으로 걸어가면 뻥 차요');
     if (me.glove && !hadGlove) toast('🧤 글러브! 폭탄 위에서 Space를 한 번 더 누르면 던져요');

@@ -39,6 +39,29 @@
     </div>
     <p class="label">플레이어 <span id="count"></span></p>
     <ul id="players"></ul>
+    <div class="setting-row">
+      <span class="label">🤖 AI 봇</span>
+      <div class="stepper" id="bot-stepper">
+        <button id="bot-minus" aria-label="봇 줄이기">−</button>
+        <b id="bot-count">0</b>
+        <button id="bot-plus" aria-label="봇 늘리기">+</button>
+      </div>
+    </div>
+    <div class="setting-row">
+      <span class="label">모드</span>
+      <div class="seg" id="mode-seg">
+        <button data-mode="solo">개인전</button>
+        <button data-mode="team">팀전 🫧</button>
+      </div>
+    </div>
+    <p class="muted mode-hint" id="mode-hint"></p>
+    <div class="team-pick hidden" id="team-pick">
+      <span class="label">내 팀</span>
+      <div class="seg">
+        <button data-team="0">A팀</button>
+        <button data-team="1">B팀</button>
+      </div>
+    </div>
     <p class="label">내 캐릭터</p>
     <div class="chars cards small" id="lobby-chars"></div>
     <p class="label">맵 <span class="muted" id="map-hint"></span></p>

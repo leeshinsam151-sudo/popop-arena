@@ -3,6 +3,7 @@
 // 맵 기믹(얼음·유사·버섯·워프·용암 균열·언 상자)도 모두 여기서 판정한다.
 import {
   BASE_SPEED, CORNER_ASSIST, DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, ICE_DECEL, ITEM_CHANCE, ITEM_WEIGHTS,
+  BUBBLE_SPEED_MUL, BUBBLE_TICKS, RESCUE_SHIELD_TICKS, TOUCH_DIST,
   ItemType, JUMP_DIST, JUMP_TIME, KICK_SPEED, LAVA_CYCLE, LAVA_ERUPT, LAVA_WARN, MAX_BOMBS, MAX_RANGE,
   MAX_SPEED_LV, QUICKSAND_MUL, SOFT_DENSITY, SPEED_STEP, THROW_BOUNCE_TICKS, THROW_DIST, THROW_TICKS, Tile, DT,
 } from './constants.ts';
@@ -23,6 +24,9 @@ export interface PlayerState {
   mom: number; // 🧊 얼음 위 관성 속도 (손을 떼도 이 속도로 미끄러짐)
   jump: Jump | null; // 🍄 버섯 점프 중이면 경로
   warpLock: boolean; // 🌀 워프 직후: 워프 칸을 벗어나야 다시 탈 수 있음
+  team: number; // 팀전: 0(A) / 1(B), 개인전: -1
+  trapped: number; // 🫧 팀전: 물방울에 갇혀 남은 틱 (0이면 자유)
+  shield: number; // 구출 직후 무적 남은 틱
 }
 export interface Jump { t: number; total: number; sx: number; sy: number; tx: number; ty: number }
 export interface Bomb {
@@ -97,19 +101,34 @@ function clearArrivalZones(rows: string[], tiles: number[], w: number, h: number
   }
 }
 
-export function createGame(mapId: MapId, playerIds: string[], rand: () => number): GameState {
+/** 팀전 스폰: A팀은 왼쪽, B팀은 오른쪽 */
+export function teamSpawns(w: number, h: number): [number, number][][] {
+  const cx = Math.floor(w / 2);
+  return [
+    [[1, 1], [1, h - 2], [cx, 1]],
+    [[w - 2, h - 2], [w - 2, 1], [cx, h - 2]],
+  ];
+}
+
+/** teams를 주면 팀전 (각 플레이어의 팀 0/1), 없으면 개인전 */
+export function createGame(mapId: MapId, playerIds: string[], rand: () => number, teams?: number[]): GameState {
   const rows = MAP_ROWS[mapId];
   const h = rows.length, w = rows[0].length;
   const tiles: number[] = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) tiles.push(tileFromChar(rows[y][x], rand));
   clearArrivalZones(rows, tiles, w, h);
   const spawns = spawnOrder(w, h);
-  const players = playerIds.map((id, slot): PlayerState => ({
-    id, slot,
-    x: spawns[slot][0], y: spawns[slot][1],
-    alive: true, bombMax: 1, range: 2, speedLv: 0, kick: false, glove: false, facing: Dir.Down,
-    mom: 0, jump: null, warpLock: false,
-  }));
+  const tSpawns = teamSpawns(w, h);
+  const teamCount = [0, 0];
+  const players = playerIds.map((id, slot): PlayerState => {
+    const team = teams ? teams[slot] : -1;
+    const [x, y] = team >= 0 ? tSpawns[team][teamCount[team]++] : spawns[slot];
+    return {
+      id, slot, x, y,
+      alive: true, bombMax: 1, range: 2, speedLv: 0, kick: false, glove: false, facing: Dir.Down,
+      mom: 0, jump: null, warpLock: false, team, trapped: 0, shield: 0,
+    };
+  });
   return { mapId, w, h, tiles, players, bombs: [], flames: [], items: [], tick: 0, nextBombId: 1 };
 }
 
@@ -257,7 +276,7 @@ export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): 
     }
   } else {
     p.facing = dir;
-    const speed = playerSpeed(p) * (here === 'Q' ? QUICKSAND_MUL : 1);
+    const speed = playerSpeed(p) * (here === 'Q' ? QUICKSAND_MUL : 1) * (p.trapped ? BUBBLE_SPEED_MUL : 1);
     const moved = moveCore(s, p, dir, speed * dt);
     p.mom = onIce && moved > 1e-6 ? speed : 0;
   }
@@ -267,6 +286,7 @@ export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): 
 
 /** 이동 후 발밑 기믹 발동: 🍄 버섯 점프, 🌀 워프 */
 function triggerFeatures(s: GameState, p: PlayerState, dir: Dir) {
+  if (p.trapped) return; // 물방울 안에서는 버섯·워프 안 탐
   const cx = Math.round(p.x), cy = Math.round(p.y);
   const here = featureAt(s.mapId, cx, cy);
   const nearCenter = Math.abs(p.x - cx) < 0.3 && Math.abs(p.y - cy) < 0.3;
@@ -307,7 +327,7 @@ export function updatePassers(s: GameState): void {
 }
 
 export function placeBomb(s: GameState, p: PlayerState): boolean {
-  if (!p.alive) return false;
+  if (!p.alive || p.trapped) return false;
   const cx = Math.round(p.x), cy = Math.round(p.y);
   if (s.tiles[cy * s.w + cx] !== Tile.Floor) return false;
   if (s.bombs.some((b) => b.x === cx && b.y === cy)) return false;
@@ -322,7 +342,7 @@ export function placeBomb(s: GameState, p: PlayerState): boolean {
 
 /** 🧤 발밑 폭탄을 바라보는 방향으로 던진다. 착지 칸이 막혀 있으면 한 칸씩 더 날아간다. */
 export function throwBomb(s: GameState, p: PlayerState): boolean {
-  if (!p.alive || !p.glove) return false;
+  if (!p.alive || !p.glove || p.trapped) return false;
   const cx = Math.round(p.x), cy = Math.round(p.y);
   const b = groundBombAt(s, cx, cy);
   if (!b || b.slide !== Dir.None) return false;
@@ -453,10 +473,39 @@ export function stepWorld(s: GameState, rand: () => number): void {
 
   for (const p of s.players) {
     if (!p.alive || p.jump) continue; // 🍄 점프 중에는 공중이라 불길에 안 맞음
+    if (p.shield > 0) p.shield--;
     const cx = Math.round(p.x), cy = Math.round(p.y);
-    if (flameAt(cx, cy)) { p.alive = false; continue; }
+    if (p.trapped) {
+      // 🫧 시간이 다 되면 물방울이 터지며 탈락
+      if (--p.trapped <= 0) { p.trapped = 0; p.alive = false; }
+      continue;
+    }
+    if (flameAt(cx, cy) && p.shield === 0) {
+      if (p.team >= 0) { p.trapped = BUBBLE_TICKS; p.mom = 0; } // 팀전: 물방울에 갇힘
+      else p.alive = false; // 개인전: 바로 탈락
+      continue;
+    }
     const i = s.items.findIndex((it) => it.x === cx && it.y === cy);
     if (i >= 0) { applyItem(p, s.items[i].type); s.items.splice(i, 1); }
+  }
+  if (s.players.some((p) => p.team >= 0)) resolveBubbles(s);
+}
+
+/** 🫧 팀전: 갇힌 사람에게 아군이 닿으면 구출, 적이 닿으면 탈락. 팀 전원이 갇히면 그 팀 전멸 */
+function resolveBubbles(s: GameState) {
+  for (const p of s.players) {
+    if (!p.alive || !p.trapped) continue;
+    for (const q of s.players) {
+      if (q === p || !q.alive || q.trapped || q.jump) continue;
+      if (Math.abs(q.x - p.x) > TOUCH_DIST || Math.abs(q.y - p.y) > TOUCH_DIST) continue;
+      if (q.team === p.team) { p.trapped = 0; p.shield = RESCUE_SHIELD_TICKS; } // 구출!
+      else { p.trapped = 0; p.alive = false; } // 적이 터뜨림
+      break;
+    }
+  }
+  for (const team of [0, 1]) {
+    const members = s.players.filter((p) => p.team === team && p.alive);
+    if (members.length && members.every((p) => p.trapped)) for (const p of members) { p.trapped = 0; p.alive = false; }
   }
 }
 

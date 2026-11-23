@@ -234,3 +234,57 @@ test('🌀🍄 도착 칸 주변에는 랜덤 블록이 없어서 갇히지 않�
     }
   }
 });
+
+// ---------- 팀전 🫧 ----------
+const teamGame = () => createGame('glacier', ['a1', 'b1', 'a2', 'b2'], noRand, [0, 1, 0, 1]);
+
+test('팀전 스폰: A팀은 왼쪽, B팀은 오른쪽', () => {
+  const s = teamGame();
+  const [a1, b1, a2, b2] = s.players;
+  assert.ok(a1.x === 1 && a2.x === 1);
+  assert.ok(b1.x === s.w - 2 && b2.x === s.w - 2);
+});
+
+test('🫧 팀전: 불길에 맞으면 갇히고, 아군이 닿으면 구출된다', () => {
+  const s = teamGame();
+  const [a1, , a2] = s.players;
+  s.flames.push({ x: Math.round(a1.x), y: Math.round(a1.y), ttl: 5 });
+  stepWorld(s, noRand);
+  assert.ok(a1.alive && a1.trapped > 0, 'trapped, not dead');
+  assert.equal(placeBomb(s, a1), false, 'no bombs while trapped');
+  s.flames = [];
+  a2.x = a1.x + 0.5; a2.y = a1.y;
+  stepWorld(s, noRand);
+  assert.equal(a1.trapped, 0, 'rescued');
+  assert.ok(a1.alive && a1.shield > 0);
+});
+
+test('🫧 팀전: 적이 닿거나 시간이 다 되면 탈락', () => {
+  const s = teamGame();
+  const [a1, b1, a2] = s.players;
+  a1.trapped = 50;
+  b1.x = a1.x; b1.y = a1.y + 0.5;
+  stepWorld(s, noRand);
+  assert.equal(a1.alive, false, 'popped by enemy');
+  a2.trapped = 3;
+  run(s, 3);
+  assert.equal(a2.alive, false, 'timed out');
+});
+
+test('🫧 팀전: 팀원이 모두 갇히면 그 팀은 전멸', () => {
+  const s = teamGame();
+  const [a1, b1, a2] = s.players;
+  a1.trapped = 80; a2.trapped = 80;
+  stepWorld(s, noRand);
+  assert.equal(a1.alive || a2.alive, false);
+  assert.ok(b1.alive);
+});
+
+test('개인전은 불길에 맞으면 바로 탈락 (물방울 없음)', () => {
+  const s = emptyGame();
+  const p = s.players[0];
+  s.flames.push({ x: 1, y: 1, ttl: 5 });
+  stepWorld(s, noRand);
+  assert.equal(p.alive, false);
+  assert.equal(p.trapped, 0);
+});

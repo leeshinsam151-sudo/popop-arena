@@ -24,6 +24,10 @@ export interface CharacterModel {
   die(): void;
   /** 🌲 덤불에 숨었을 때 반투명 처리 (1 = 보통) */
   setOpacity(o: number): void;
+  /** 발밑 링 색 (팀전이면 팀 색) */
+  setRingColor(c: number): void;
+  /** 🫧 물방울: left = 남은 비율(0~1), 0이면 숨김 */
+  setBubble(left: number, t: number): void;
   dispose(): void;
 }
 
@@ -130,6 +134,21 @@ export function createCharacter(index: number): CharacterModel {
   ring.position.y = 0.015;
   root.add(ring);
 
+  // 🫧 팀전 물방울 (평소엔 숨김)
+  const bubble = new THREE.Group();
+  bubble.visible = false;
+  bubble.position.y = 0.62;
+  const bubbleMat = new THREE.MeshStandardMaterial({
+    color: 0x9fdcff, emissive: 0x2a7fbf, emissiveIntensity: 0.35, transparent: true, opacity: 0.38,
+    roughness: 0.05, metalness: 0.1, depthWrite: false,
+  });
+  bubble.add(new THREE.Mesh(sph, bubbleMat));
+  const shine = new THREE.Mesh(sph, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.75 }));
+  shine.position.set(-0.28, 0.3, 0.42); shine.scale.set(0.12, 0.08, 0.04);
+  bubble.add(shine);
+  bubble.scale.setScalar(0.72);
+  root.add(bubble);
+
   let dying = -1;
   let opacity = 1;
   const phase = index * 1.3;
@@ -158,12 +177,22 @@ export function createCharacter(index: number): CharacterModel {
       }
     },
     die() { if (dying < 0) dying = 0; },
+    setRingColor(c) { (ring.material as THREE.MeshBasicMaterial).color.set(c); },
+    setBubble(left, t) {
+      bubble.visible = left > 0;
+      if (!bubble.visible) return;
+      const wob = Math.sin(t * 6) * 0.04;
+      bubble.scale.set(0.72 + wob, 0.72 - wob, 0.72 + wob);
+      // 시간이 얼마 안 남으면 깜빡임
+      bubbleMat.opacity = left < 0.3 ? 0.2 + Math.abs(Math.sin(t * 14)) * 0.35 : 0.38;
+      bubbleMat.color.setHSL(0.56 - (1 - left) * 0.08, 0.8, 0.75);
+    },
     setOpacity(o) {
       if (o === opacity) return;
       opacity = o;
       root.traverse((obj) => {
         const mm = (obj as THREE.Mesh).material as THREE.Material | undefined;
-        if (!mm || obj instanceof THREE.Sprite) return;
+        if (!mm || obj instanceof THREE.Sprite || obj.parent === bubble) return;
         if (mm.userData.baseOpacity === undefined) mm.userData.baseOpacity = mm.opacity;
         mm.transparent = o < 1 || mm.userData.baseOpacity < 1;
         mm.opacity = mm.userData.baseOpacity * o;
