@@ -1,7 +1,7 @@
 import type { WebSocket } from 'ws';
 import { CHARACTERS, DT, Dir, END_TICKS, MAX_PLAYERS, ROUND_TICKS } from '../shared/constants.ts';
 import { MAP_IDS, type MapId } from '../shared/maps.ts';
-import type { ClientMsg, MetaPlayer, Phase, ServerMsg } from '../shared/protocol.ts';
+import type { ClientMsg, MapPick, MetaPlayer, Phase, ServerMsg } from '../shared/protocol.ts';
 import { bombAction, createGame, movePlayer, stepWorld, updatePassers, type GameState } from '../shared/sim.ts';
 
 const MAX_CLIENTS = 12; // 플레이어 6 + 관전자
@@ -26,6 +26,7 @@ export class Room {
   private clients = new Map<string, Client>();
   private host = '';
   private phase: Phase = 'lobby';
+  private pick: MapPick = 'glacier';
   private mapId: MapId = 'glacier';
   private state: GameState | null = null;
   private timeLeft = 0;
@@ -84,8 +85,9 @@ export class Room {
         if (id === this.host && this.phase === 'lobby') this.startRound();
         break;
       case 'map':
-        if (id === this.host && this.phase === 'lobby' && MAP_IDS.includes(msg.mapId)) {
-          this.mapId = msg.mapId;
+        if (id === this.host && this.phase === 'lobby' && (msg.mapId === 'random' || MAP_IDS.includes(msg.mapId))) {
+          this.pick = msg.mapId;
+          if (msg.mapId !== 'random') this.mapId = msg.mapId;
           this.broadcastMeta();
         }
         break;
@@ -108,6 +110,7 @@ export class Room {
       c.inputs = [];
       c.bombPressed = c.lastB; // 라운드 전에 누른 폭탄은 무시
     }
+    if (this.pick === 'random') this.mapId = MAP_IDS[Math.floor(Math.random() * MAP_IDS.length)];
     this.state = createGame(this.mapId, players.map((c) => c.id), Math.random);
     if (process.env.DEV_ITEMS === '1') devItems(this.state);
     this.timeLeft = ROUND_TICKS;
@@ -181,7 +184,7 @@ export class Room {
     const players: MetaPlayer[] = [...this.clients.values()].map((c) => ({
       id: c.id, name: c.name, char: c.char, wins: c.wins, playing: c.playing,
     }));
-    const msg: ServerMsg = { t: 'meta', host: this.host, phase: this.phase, mapId: this.mapId, players, result: this.result };
+    const msg: ServerMsg = { t: 'meta', host: this.host, phase: this.phase, pick: this.pick, mapId: this.mapId, players, result: this.result };
     const text = JSON.stringify(msg);
     for (const c of this.clients.values()) if (c.ws.readyState === 1) c.ws.send(text);
   }

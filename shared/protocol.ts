@@ -4,12 +4,14 @@ import type { MapId } from './maps.ts';
 import type { Bomb, Flame, Item, PlayerState } from './sim.ts';
 
 export type Phase = 'lobby' | 'playing' | 'ended';
+/** 방장이 고른 맵. 'random'이면 판마다 무작위 */
+export type MapPick = MapId | 'random';
 
 export type ClientMsg =
   | { t: 'join'; room: string; name: string; char: number }
   | { t: 'in'; s: number; d: Dir; b: number } // s=입력 순번, d=방향, b=폭탄 누른 누적 횟수
   | { t: 'start' }
-  | { t: 'map'; mapId: MapId }
+  | { t: 'map'; mapId: MapPick }
   | { t: 'char'; char: number }
   | { t: 'ping'; c: number }; // 왕복 시간 측정 (c = 클라이언트 시각)
 
@@ -27,7 +29,8 @@ export type ServerMsg =
       t: 'meta';
       host: string;
       phase: Phase;
-      mapId: MapId;
+      pick: MapPick; // 방장이 고른 맵 (랜덤 포함)
+      mapId: MapId; // 실제로 쓰는 맵 (진행 중인 판, 또는 로비 미리보기)
       players: MetaPlayer[];
       result?: { winner: string | null }; // phase === 'ended'일 때. null이면 무승부
     }

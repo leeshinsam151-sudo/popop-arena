@@ -1,13 +1,14 @@
 import * as THREE from 'three';
 import './style.css';
 import { CHARACTERS, DT, Dir, MAX_PLAYERS, TICK_RATE } from '../../shared/constants.ts';
-import { MAP_IDS, MAP_NAMES, MAP_ROWS, type MapId } from '../../shared/maps.ts';
+import { MAP_IDS, MAP_NAMES, type MapId } from '../../shared/maps.ts';
 import type { MetaPlayer, ServerMsg } from '../../shared/protocol.ts';
-import { spawnOrder, movePlayer, tileFromChar, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
+import { spawnOrder, movePlayer, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
 import { Arena } from './arena.ts';
 import { createCharacter, type CharacterModel } from './characters.ts';
 import { Input } from './input.ts';
 import { Net } from './net.ts';
+import { Studio, lobbyTiles } from './studio.ts';
 
 type Snap = Extract<ServerMsg, { t: 's' }>;
 type Meta = Extract<ServerMsg, { t: 'meta' }>;
@@ -149,6 +150,7 @@ net.onMessage = (m) => {
     const sample = performance.now() - m.c;
     rtt = rtt ? rtt * 0.7 + sample * 0.3 : sample;
     const el = $('ping');
+    if (!joined) return; // 입장 화면에서는 버튼을 가리지 않도록 숨김
     el.textContent = `📶 ${Math.round(rtt)}ms`;
     el.className = rtt < 90 ? 'good' : rtt < 160 ? 'ok' : 'bad';
   }
@@ -176,7 +178,7 @@ function showLobbyScene() {
   if (!meta) return;
   if (arena.mapId !== meta.mapId) {
     arena.build(meta.mapId);
-    arena.setTiles(MAP_ROWS[meta.mapId].join('').split('').map((ch) => tileFromChar(ch, () => 1)).join(''));
+    arena.setTiles(lobbyTiles(meta.mapId));
   }
   const lobbyIds = new Set<string>();
   const spawns = spawnOrder(arena.w, arena.h);
@@ -380,28 +382,76 @@ nameInput.placeholder = '닉네임 (최대 12자)';
 $('join-room').textContent = ROOM;
 $('room-code').textContent = ROOM;
 
-function charButtons(el: HTMLElement, selected: number, taken: Set<number>, onPick: (i: number) => void) {
+const MAP_DESC: Record<MapId, string> = {
+  glacier: '🧊 가운데 탁 트인 얼음 호수. 숨을 곳이 적은 정면 승부',
+  volcano: '🌋 용암 강은 다리 3개로만 건널 수 있어요. 다리 앞 눈치싸움',
+  forest: '🌲 나무 3그루와 덤불 사이로 돌아가는 길이 많은 맵',
+  desert: '🏜️ 가운데 오아시스를 둘러싼 넓은 모래밭',
+};
+
+// 썸네일·미리보기 (첫 화면이 뜬 뒤 만들어서 로딩을 막지 않음)
+const studio = new Studio();
+let charThumbs: string[] = [];
+let mapThumbs: Partial<Record<MapId, string>> = {};
+setTimeout(() => {
+  try {
+    charThumbs = studio.characterThumbs();
+    mapThumbs = studio.mapThumbs();
+  } catch (err) { console.warn('썸네일 생성 실패', err); }
+  if (!joined) studio.startPreview($('preview-stage'), myChar);
+  renderUI();
+}, 30);
+
+function charCards(el: HTMLElement, selected: number, taken: Set<number>, onPick: (i: number) => void) {
   el.innerHTML = '';
   CHARACTERS.forEach((c, i) => {
     const b = document.createElement('button');
     b.className = i === selected ? 'on' : '';
     b.disabled = taken.has(i);
-    const dot = document.createElement('span');
-    dot.className = 'dot';
-    dot.style.background = hex(c.color);
-    b.append(dot, c.name);
-    b.title = taken.has(i) ? '다른 플레이어가 사용 중' : c.name;
+    b.title = `${c.name} · ${c.desc}`;
+    if (charThumbs[i]) {
+      const img = document.createElement('img');
+      img.src = charThumbs[i];
+      img.alt = c.name;
+      b.append(img);
+    } else {
+      const ph = document.createElement('span');
+      ph.className = 'thumb-fallback';
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.background = hex(c.color);
+      ph.append(dot);
+      b.append(ph);
+    }
+    b.append(c.name);
+    if (taken.has(i)) {
+      const tag = document.createElement('span');
+      tag.className = 'taken';
+      tag.textContent = '사용 중';
+      b.append(tag);
+    }
     b.onclick = () => onPick(i);
     el.append(b);
   });
+}
+
+function showPreviewInfo() {
+  const c = CHARACTERS[myChar];
+  const nameEl = $('preview-name');
+  nameEl.textContent = c.name;
+  nameEl.style.color = hex(c.color);
+  $('preview-desc').textContent = c.desc;
+  studio.setPreviewChar(myChar);
 }
 
 function doJoin() {
   const name = nameInput.value.trim().slice(0, 12) || `플레이어${Math.floor(Math.random() * 90 + 10)}`;
   store.set('popop.name', name);
   store.set('popop.char', String(myChar));
+  requestedChar = myChar;
   net.send({ t: 'join', room: ROOM, name, char: myChar });
 }
+let requestedChar = -1; // 입장할 때 고른 캐릭터 (이미 누가 쓰고 있으면 서버가 바꿔 줌)
 $('join-btn').onclick = doJoin;
 nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') doJoin(); });
 
@@ -418,14 +468,23 @@ $('start-btn').onclick = () => net.send({ t: 'start' });
 function renderUI() {
   $('join').classList.toggle('hidden', joined);
   if (!joined) {
-    charButtons($('join-chars'), myChar, new Set(), (i) => { myChar = i; renderUI(); });
+    charCards($('join-chars'), myChar, new Set(), (i) => { myChar = i; store.set('popop.char', String(i)); renderUI(); });
+    showPreviewInfo();
     return;
   }
+  studio.stopPreview();
   const m = meta;
   if (!m) return;
   const isHost = m.host === myId;
   const me = metaPlayer(myId);
-  if (me) { myChar = me.char; store.set('popop.char', String(me.char)); }
+  if (me) {
+    if (requestedChar >= 0 && me.char !== requestedChar) {
+      toast(`${CHARACTERS[requestedChar].name}은(는) 이미 다른 사람이 골라서 ${CHARACTERS[me.char].name}(으)로 바꿨어요. 대기실에서 다시 고를 수 있어요`);
+    }
+    requestedChar = -1;
+    myChar = me.char;
+    store.set('popop.char', String(me.char));
+  }
 
   $('lobby').classList.toggle('hidden', m.phase !== 'lobby');
   $('hud').classList.toggle('hidden', m.phase === 'lobby');
@@ -450,19 +509,37 @@ function renderUI() {
   $('count').textContent = `${Math.min(m.players.length, MAX_PLAYERS)}/${MAX_PLAYERS}`;
 
   const taken = new Set(m.players.filter((p) => p.id !== myId).map((p) => p.char));
-  charButtons($('lobby-chars'), myChar, taken, (i) => net.send({ t: 'char', char: i }));
+  charCards($('lobby-chars'), myChar, taken, (i) => net.send({ t: 'char', char: i }));
 
   const maps = $('maps');
   maps.innerHTML = '';
   for (const id of MAP_IDS) {
     const b = document.createElement('button');
-    b.textContent = MAP_NAMES[id];
-    b.className = id === m.mapId ? 'on' : '';
+    b.className = id === m.pick ? 'on' : '';
     b.disabled = !isHost;
-    b.onclick = () => net.send({ t: 'map', mapId: id as MapId });
+    if (mapThumbs[id]) {
+      const img = document.createElement('img');
+      img.src = mapThumbs[id]!;
+      img.alt = MAP_NAMES[id];
+      b.append(img);
+    } else {
+      const ph = document.createElement('span');
+      ph.className = 'map-ph';
+      b.append(ph);
+    }
+    b.append(MAP_NAMES[id]);
+    b.title = MAP_DESC[id];
+    b.onclick = () => net.send({ t: 'map', mapId: id });
     maps.append(b);
   }
-  $('map-hint').textContent = isHost ? '' : '(방장이 선택)';
+  const rnd = document.createElement('button');
+  rnd.className = 'random' + (m.pick === 'random' ? ' on' : '');
+  rnd.disabled = !isHost;
+  rnd.textContent = '🎲 랜덤 (판마다 무작위)';
+  rnd.onclick = () => net.send({ t: 'map', mapId: 'random' });
+  maps.append(rnd);
+  $('map-desc').textContent = m.pick === 'random' ? '🎲 게임을 시작할 때 4개 맵 중 하나가 무작위로 골라져요' : MAP_DESC[m.pick];
+  $('map-hint').textContent = isHost ? '· 눌러서 선택' : '· 방장이 선택해요';
   $('start-btn').classList.toggle('hidden', !isHost);
   $('wait-msg').textContent = isHost
     ? (m.players.length === 1 ? '혼자서도 연습할 수 있어요. 초대 링크로 팀원을 불러 보세요!' : '')
@@ -527,7 +604,7 @@ function toast(msg: string) {
 // 입장 전 배경: 맵 미리보기
 if (!meta) {
   arena.build('glacier');
-  arena.setTiles(MAP_ROWS.glacier.join('').split('').map((ch) => tileFromChar(ch, () => 1)).join(''));
+  arena.setTiles(lobbyTiles('glacier'));
 }
 renderUI();
 

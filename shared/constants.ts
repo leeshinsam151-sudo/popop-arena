@@ -58,10 +58,10 @@ export enum ItemType {
 
 // 캐릭터 6종 (디자인 시안과 동일한 색)
 export const CHARACTERS = [
-  { id: 'pop', name: '뿅', color: 0xff4b3e },
-  { id: 'dung', name: '둥', color: 0x3d7bff },
-  { id: 'leaf', name: '리프', color: 0x35c46a },
-  { id: 'volt', name: '볼트', color: 0xffc531 },
-  { id: 'mia', name: '미야', color: 0x9b5cff },
-  { id: 'koko', name: '코코', color: 0xff7eb6 },
+  { id: 'pop', name: '뿅', color: 0xff4b3e, desc: '불꽃 정령 · 성격 급한 돌격대장' },
+  { id: 'dung', name: '둥', color: 0x3d7bff, desc: '곰 후드 · 느긋하고 듬직한 형' },
+  { id: 'leaf', name: '리프', color: 0x35c46a, desc: '새싹 요정 · 차분한 전략가' },
+  { id: 'volt', name: '볼트', color: 0xffc531, desc: '꼬마 로봇 · 계산적인 발명가' },
+  { id: 'mia', name: '미야', color: 0x9b5cff, desc: '고양이 후드 · 못 말리는 장난꾸러기' },
+  { id: 'koko', name: '코코', color: 0xff7eb6, desc: '토끼 · 늘 신나는 명랑 담당' },
 ] as const;

@@ -21,8 +21,8 @@ button:disabled { cursor: default; opacity: 0.5; }
   border: 1px solid var(--line); border-radius: var(--radius); padding: 20px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
-.panel.center { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(420px, calc(100vw - 32px)); text-align: center; }
-.panel.side { right: 16px; top: 16px; width: 320px; max-height: calc(100vh - 32px); overflow-y: auto; }
+.panel.center { left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(760px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow-y: auto; text-align: center; }
+.panel.side { right: 16px; top: 16px; width: 360px; max-height: calc(100vh - 32px); overflow-y: auto; }
 h1 { margin: 0; font-size: 44px; font-weight: 400; letter-spacing: 1px; color: var(--accent); text-shadow: 0 3px 0 #a3540a; }
 .sub { margin: 4px 0 18px; color: var(--muted); }
 .label { margin: 14px 0 8px; color: var(--muted); font-size: 14px; text-align: left; }
@@ -40,6 +40,27 @@ h1 { margin: 0; font-size: 44px; font-weight: 400; letter-spacing: 1px; color: v
 .primary:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 0 #a3540a; }
 
 .chars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+
+/* 입장 화면: 왼쪽 3D 미리보기, 오른쪽 입력 */
+.join-body { display: grid; grid-template-columns: 260px 1fr; gap: 20px; align-items: start; text-align: left; }
+.preview { display: flex; flex-direction: column; align-items: center; }
+.stage {
+  width: 260px; height: 280px; border-radius: 16px;
+  background: radial-gradient(circle at 50% 40%, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.03) 70%);
+  border: 1px solid var(--line); overflow: hidden;
+}
+.stage canvas { width: 100%; height: 100%; display: block; }
+.char-name { margin: 10px 0 2px; font-size: 26px; }
+.char-desc { margin: 0; color: var(--muted); font-size: 14px; text-align: center; }
+
+/* 캐릭터 카드: 썸네일 + 이름 */
+.chars.cards button { flex-direction: column; gap: 2px; padding: 6px 4px 8px; position: relative; }
+.chars.cards img { width: 72px; height: 72px; display: block; }
+.chars.cards.small img { width: 52px; height: 52px; }
+.chars.cards .thumb-fallback { width: 72px; height: 72px; display: grid; place-items: center; }
+.chars.cards.small .thumb-fallback { width: 52px; height: 52px; }
+.chars.cards button:disabled { opacity: 0.35; }
+.chars.cards .taken { position: absolute; top: 4px; right: 4px; font-size: 11px; padding: 1px 6px; border-radius: 999px; background: rgba(0, 0, 0, 0.55); }
 .chars button {
   display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: 12px;
   background: rgba(255, 255, 255, 0.06); border: 2px solid transparent; font-size: 16px;
@@ -56,7 +77,17 @@ h1 { margin: 0; font-size: 44px; font-weight: 400; letter-spacing: 1px; color: v
 #players .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #players .wins { color: var(--accent); font-size: 14px; }
 .maps { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-.maps button { padding: 10px; border-radius: 12px; background: rgba(255, 255, 255, 0.06); border: 2px solid transparent; }
+.maps button { padding: 6px; border-radius: 12px; background: rgba(255, 255, 255, 0.06); border: 2px solid transparent; display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.maps button img, .maps .map-ph { width: 100%; aspect-ratio: 14 / 9; object-fit: cover; border-radius: 8px; display: block; background: rgba(255, 255, 255, 0.08); }
+.maps button.random { grid-column: span 2; flex-direction: row; align-items: center; justify-content: center; padding: 10px; }
+.maps button:disabled { cursor: default; opacity: 1; }
+.maps button:disabled:not(.on) { opacity: 0.55; }
+.map-desc { margin: 8px 0 0; min-height: 1.2em; }
+/* 게임 시작 버튼은 패널을 스크롤해도 항상 아래에 보이게 */
+.lobby-actions { position: sticky; bottom: -20px; margin: 12px -20px -20px; padding: 4px 20px 16px; background: linear-gradient(to bottom, rgba(22, 24, 34, 0), rgba(22, 24, 34, 0.96) 22%); }
+.lobby-actions .primary { margin-top: 10px; }
+.lobby-actions p { margin: 6px 0 0; text-align: center; }
+.lobby-actions p:empty { display: none; }
 .maps button.on { border-color: var(--accent); background: rgba(255, 176, 32, 0.15); }
 .help { margin: 14px 0 0; color: var(--muted); font-size: 13px; text-align: center; }
 kbd { font-family: inherit; padding: 1px 6px; border-radius: 6px; background: rgba(255, 255, 255, 0.12); }
@@ -78,13 +109,19 @@ kbd { font-family: inherit; padding: 1px 6px; border-radius: 6px; background: rg
 }
 @keyframes pop { from { transform: translate(-50%, -50%) scale(0.6); opacity: 0; } }
 #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--panel); padding: 10px 18px; border-radius: 999px; }
-#ping { position: fixed; right: 12px; bottom: 10px; font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--panel); color: var(--muted); pointer-events: none; }
+#ping { position: fixed; left: 12px; bottom: 10px; font-size: 13px; padding: 4px 10px; border-radius: 999px; background: var(--panel); color: var(--muted); pointer-events: none; }
 #ping:empty { display: none; }
 #ping.good { color: #6be38a; } #ping.ok { color: #ffd166; } #ping.bad { color: #ff6a5a; }
 #status { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); background: #b3261e; padding: 10px 18px; border-radius: 12px; display: flex; gap: 10px; align-items: center; }
 #status button { background: #fff; color: #b3261e; padding: 4px 10px; border-radius: 8px; }
 
 @media (max-width: 720px) {
+  .join-body { grid-template-columns: 1fr; }
+  .stage { width: 170px; height: 170px; }
+  .char-name { margin-top: 6px; font-size: 22px; }
+  .panel.center { padding: 16px; }
+  .sub { margin-bottom: 10px; }
+  .chars.cards img, .chars.cards .thumb-fallback { width: 56px; height: 56px; }
   .panel.side { left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; max-height: 55vh; }
   h1 { font-size: 36px; }
   #alive { font-size: 13px; }
