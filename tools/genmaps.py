@@ -72,12 +72,24 @@ for (a, b), ch in [(((3, 3), (W - 4, H - 4)), 'A'), (((W - 4, 3), (3, H - 4)), '
 g[CY][CX] = 'O'
 maps['desert'] = g
 
-names = {'glacier': '빙하', 'volcano': '화산', 'forest': '숲속', 'desert': '사막'}
+# 놀이공원: 가운데 대관람차(W)를 시계 방향으로 도는 컨베이어 순환 트랙(> v < ^), 귀퉁이 트램펄린(J)
+g = base()
+x0, x1, y0, y1 = 5, W - 6, 5, H - 6  # 홀수 줄·칸이라 기둥과 겹치지 않음
+for x in range(x0, x1): g[y0][x] = '>'
+for y in range(y0, y1): g[y][x1] = 'v'
+for x in range(x1, x0, -1): g[y1][x] = '<'
+for y in range(y1, y0, -1): g[y][x0] = '^'
+g[CY][CX] = 'W'
+sym(g, [(3, 3)], 'J')
+maps['park'] = g
+
+names = {'glacier': '빙하', 'volcano': '화산', 'forest': '숲속', 'desert': '사막', 'park': '놀이공원'}
 out = [f"// {W}x{H} 맵 데이터 (tools/genmaps.py로 생성, 상하좌우 대칭) — 직접 수정하지 말고 생성기를 고칠 것",
        "// # 벽  S 스폰  _ 스폰 안전칸  . 바닥(랜덤 블록)",
        "// I 얼음  F 언 상자  ~ 용암 강  = 다리  L 용암 균열  G 덤불  M 버섯  T 나무  Q 유사  A/B/C 워프  O 오아시스",
-       "export type MapId = 'glacier' | 'volcano' | 'forest' | 'desert';",
-       "export const MAP_IDS: MapId[] = ['glacier', 'volcano', 'forest', 'desert'];",
+       "// > v < ^ 컨베이어 벨트(화살표 방향으로 운반)  J 트램펄린  W 대관람차",
+       "export type MapId = 'glacier' | 'volcano' | 'forest' | 'desert' | 'park';",
+       "export const MAP_IDS: MapId[] = ['glacier', 'volcano', 'forest', 'desert', 'park'];",
        "export const MAP_NAMES: Record<MapId, string> = " + json.dumps(names, ensure_ascii=False) + ";",
        "export const MAP_ROWS: Record<MapId, string[]> = {"]
 for k, v in maps.items():

@@ -5,8 +5,8 @@
 //  2. 지금 칸이 위험하면 → 제때 도착할 수 있는 가장 가까운 안전한 칸으로 도망
 //  3. 안전하면 → 목표(아이템, 부술 블록 옆, 적, 갇힌 아군 구출·적 터뜨리기)를 점수로 골라 이동
 //  4. 폭탄을 놓으면 득이 있고 + 놓은 뒤에도 피할 길이 있을 때만 폭탄
-import { DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, LAVA_CYCLE, LAVA_WARN, QUICKSAND_MUL, TICK_RATE, Tile } from '../shared/constants.ts';
-import { featureAt, isBlocked, lavaCracks, playerSpeed, type GameState, type PlayerState } from '../shared/sim.ts';
+import { CONVEYOR_SPEED, DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, LAVA_CYCLE, LAVA_WARN, QUICKSAND_MUL, TICK_RATE, Tile } from '../shared/constants.ts';
+import { beltAt, featureAt, isBlocked, lavaCracks, playerSpeed, type GameState, type PlayerState } from '../shared/sim.ts';
 
 const SAFE = Infinity;
 
@@ -21,8 +21,27 @@ function dangerMap(s: GameState, extra?: { x: number; y: number; range: number }
   const danger = new Array<number>(s.w * s.h).fill(SAFE);
   for (const f of s.flames) danger[f.y * s.w + f.x] = 0;
 
-  type B = { x: number; y: number; range: number; t: number };
-  const bombs: B[] = s.bombs.map((b) => ({ x: b.x, y: b.y, range: b.range, t: b.fly > 0 ? b.fly + b.fuse : b.fuse }));
+  // parent가 있으면 벨트를 따라 움직일 "예상 위치" (진짜 폭탄이 아님)
+  type B = { x: number; y: number; range: number; t: number; parent?: B };
+  const bombs: B[] = [];
+  for (const b of s.bombs) {
+    const t = b.fly > 0 ? b.fly + b.fuse : b.fuse;
+    const real: B = { x: b.x, y: b.y, range: b.range, t };
+    bombs.push(real);
+    // 🎢 벨트 위 폭탄은 터질 때까지 벨트를 따라 움직이니, 지나갈 칸마다 터진다고 가정
+    if (b.fly === 0 && !b.slide) {
+      let x = b.x, y = b.y;
+      const steps = Math.ceil((t / TICK_RATE) * CONVEYOR_SPEED) + 1;
+      for (let i = 0; i < steps; i++) {
+        const dir = beltAt(s.mapId, x, y);
+        if (dir === Dir.None) break;
+        const [dx, dy] = DIR_VEC[dir];
+        if (isBlocked(s, x + dx, y + dy, '')) break;
+        x += dx; y += dy;
+        bombs.push({ x, y, range: b.range, t, parent: real }); // 어디에 있든 터지는 시각은 같음
+      }
+    }
+  }
   if (extra) bombs.push({ ...extra, t: FUSE_TICKS });
   const blast = (b: B) => {
     const cells: number[] = [b.y * s.w + b.x];
@@ -35,7 +54,7 @@ function dangerMap(s: GameState, extra?: { x: number; y: number; range: number }
         if (t === Tile.Wall) break;
         cells.push(y * s.w + x);
         if (t === Tile.Soft || t === Tile.Frozen || t === Tile.Cracked) break;
-        if (bombs.some((o) => o !== b && o.x === x && o.y === y)) break;
+        if (bombs.some((o) => o !== b && !o.parent && o.x === x && o.y === y)) break;
       }
     }
     return cells;
@@ -46,10 +65,11 @@ function dangerMap(s: GameState, extra?: { x: number; y: number; range: number }
     changed = false;
     bombs.forEach((b, i) => {
       for (const c of blasts[i]) for (const o of bombs) {
-        if (o.y * s.w + o.x === c && o.t > b.t) { o.t = b.t; changed = true; }
+        if (!o.parent && o.y * s.w + o.x === c && o.t > b.t) { o.t = b.t; changed = true; }
       }
     });
   }
+  for (const b of bombs) if (b.parent) b.t = b.parent.t; // 예상 위치는 진짜 폭탄과 같은 시각에 터짐
   bombs.forEach((b, i) => { for (const c of blasts[i]) danger[c] = Math.min(danger[c], b.t); });
 
   // 🌋 곧 분출할 용암 균열
@@ -76,8 +96,8 @@ function bfs(s: GameState, me: PlayerState, passable: (idx: number, dist: number
       const [dx, dy] = DIR_VEC[d];
       const nx = cx + dx, ny = cy + dy, ni = ny * s.w + nx;
       if (seen.has(ni) || isBlocked(s, nx, ny, me.id)) continue;
-      // 워프·버섯은 엉뚱한 곳으로 보내 버리니 봇은 밟지 않음
-      if ('ABCM'.includes(featureAt(s.mapId, nx, ny))) continue;
+      // 워프·버섯·트램펄린은 엉뚱한 곳으로 보내 버리니 봇은 밟지 않음
+      if ('ABCMJ'.includes(featureAt(s.mapId, nx, ny))) continue;
       if (!passable(ni, cur.dist + 1)) continue;
       seen.add(ni);
       out.push({ idx: ni, dist: cur.dist + 1, first: cur.first === Dir.None ? (d as Dir) : cur.first });
@@ -91,7 +111,7 @@ function escape(s: GameState, me: PlayerState, danger: number[]): Node | null {
   // 사막은 유사 때문에 느려질 수 있고, 빙판은 미끄러져 지나치니 여유를 더 둠
   const speed = playerSpeed(me) * (s.mapId === 'desert' ? QUICKSAND_MUL : 1);
   const stepTicks = TICK_RATE / speed;
-  const margin = s.mapId === 'glacier' ? 7 : 3;
+  const margin = s.mapId === 'glacier' ? 7 : s.mapId === 'park' ? 6 : 3; // 빙판 미끄러짐·벨트에 밀림 대비
   const nodes = bfs(s, me, (idx, dist) => {
     const arrive = dist * stepTicks;
     const t = danger[idx];
@@ -156,6 +176,7 @@ export function botThink(s: GameState, me: PlayerState, mind: BotMind): { dir: D
     if (n.dist === 0) continue;
     const x = n.idx % s.w, y = Math.floor(n.idx / s.w);
     let score = -n.dist;
+    if (beltAt(s.mapId, x, y) !== Dir.None) score -= 3; // 벨트 위에 서 있으면 엉뚱한 데로 실려 감
     if (s.items.some((it) => it.x === x && it.y === y)) score += 14;
     if (canBomb) score += Math.max(0, bombValue(s, me, x, y)) * 4;
     for (const p of s.players) {

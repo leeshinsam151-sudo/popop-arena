@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DT, Dir, FUSE_TICKS, JUMP_TIME, Tile } from './constants.ts';
-import { MAP_ROWS } from './maps.ts';
+import { MAP_ROWS, type MapId } from './maps.ts';
 import { bombAction, createGame, lavaCracks, seededRandom, lavaState, movePlayer, placeBomb, stepWorld, throwBomb, updatePassers, type GameState, type PlayerState } from './sim.ts';
 
 const noRand = () => 0.99; // 랜덤 블록 없음, 아이템 없음
@@ -128,7 +128,7 @@ test('🧤 글러브: 벽 너머로 던지고, 착지 칸이 막혀 있으면 �
 });
 
 // ---------- 맵 기믹 ----------
-const mapGame = (mapId: 'glacier' | 'volcano' | 'forest' | 'desert') => createGame(mapId, ['p0', 'p1'], noRand);
+const mapGame = (mapId: MapId) => createGame(mapId, ['p0', 'p1'], noRand);
 const press = (s: GameState, p: PlayerState, dir: Dir, ticks: number) => {
   for (let i = 0; i < ticks; i++) { movePlayer(s, p, dir, DT); updatePassers(s); }
 };
@@ -287,4 +287,45 @@ test('개인전은 불길에 맞으면 바로 탈락 (물방울 없음)', () => 
   stepWorld(s, noRand);
   assert.equal(p.alive, false);
   assert.equal(p.trapped, 0);
+});
+
+// ---------- 놀이공원 🎢 ----------
+test('🎢 벨트: 가만히 있어도 화살표 방향으로 실려 간다', () => {
+  const s = mapGame('park');
+  const p = s.players[0];
+  p.x = 6; p.y = 5; // 위쪽 줄 '>' 벨트
+  press(s, p, Dir.None, 10);
+  assert.ok(Math.abs(p.x - (6 + 1.6 * 0.5)) < 1e-6, `moved to ${p.x}`);
+  assert.equal(p.y, 5);
+});
+
+test('🎢 벨트: 가로질러 건너갈 수 있다 (벨트 쪽으로 끌려가지 않음)', () => {
+  const s = mapGame('park');
+  const p = s.players[0];
+  p.x = 7; p.y = 4; // 벨트(5번 줄) 바로 위
+  press(s, p, Dir.Down, 20);
+  assert.ok(p.y >= 6, `crossed to y=${p.y.toFixed(2)}`);
+});
+
+test('🎢 벨트: 위에 놓은 폭탄도 실려 가고, 막히면 칸 중심에 멈춘다', () => {
+  const s = mapGame('park');
+  const p = s.players[0];
+  p.x = 6; p.y = 5; placeBomb(s, p);
+  p.x = 1; p.y = 1; updatePassers(s);
+  run(s, 20);
+  const b = s.bombs[0];
+  assert.ok(b.x > 6, `bomb carried to ${b.fx.toFixed(2)}`);
+  s.tiles[5 * s.w + 10] = Tile.Soft; // 앞을 막으면
+  run(s, 20);
+  assert.equal(b.fx, 9, 'stopped at the cell before the block');
+});
+
+test('🤸 트램펄린: 버섯처럼 2칸 점프', () => {
+  const s = mapGame('park');
+  const p = s.players[0];
+  p.x = 3; p.y = 3; // J
+  press(s, p, Dir.Right, 1);
+  assert.ok(p.jump);
+  press(s, p, Dir.None, Math.ceil(JUMP_TIME / DT) + 1);
+  assert.deepEqual([p.x, p.y], [5, 3]);
 });

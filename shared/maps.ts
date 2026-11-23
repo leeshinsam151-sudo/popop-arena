@@ -1,9 +1,10 @@
 // 19x15 맵 데이터 (tools/genmaps.py로 생성, 상하좌우 대칭) — 직접 수정하지 말고 생성기를 고칠 것
 // # 벽  S 스폰  _ 스폰 안전칸  . 바닥(랜덤 블록)
 // I 얼음  F 언 상자  ~ 용암 강  = 다리  L 용암 균열  G 덤불  M 버섯  T 나무  Q 유사  A/B/C 워프  O 오아시스
-export type MapId = 'glacier' | 'volcano' | 'forest' | 'desert';
-export const MAP_IDS: MapId[] = ['glacier', 'volcano', 'forest', 'desert'];
-export const MAP_NAMES: Record<MapId, string> = {"glacier": "빙하", "volcano": "화산", "forest": "숲속", "desert": "사막"};
+// > v < ^ 컨베이어 벨트(화살표 방향으로 운반)  J 트램펄린  W 대관람차
+export type MapId = 'glacier' | 'volcano' | 'forest' | 'desert' | 'park';
+export const MAP_IDS: MapId[] = ['glacier', 'volcano', 'forest', 'desert', 'park'];
+export const MAP_NAMES: Record<MapId, string> = {"glacier": "빙하", "volcano": "화산", "forest": "숲속", "desert": "사막", "park": "놀이공원"};
 export const MAP_ROWS: Record<MapId, string[]> = {
   glacier: [
     '###################',
@@ -69,6 +70,23 @@ export const MAP_ROWS: Record<MapId, string[]> = {
     '#.......QQQ.......#',
     '#.#.#.#.#Q#.#.#.#.#',
     '#..B....QQQ....A..#',
+    '#_#.#.#.#_#.#.#.#_#',
+    '#S_....._S_....._S#',
+    '###################',
+  ],
+  park: [
+    '###################',
+    '#S_....._S_....._S#',
+    '#_#.#.#.#_#.#.#.#_#',
+    '#..J...........J..#',
+    '#.#.#.#.#.#.#.#.#.#',
+    '#....>>>>>>>>v....#',
+    '#.#.#^#.#.#.#v#.#.#',
+    '#....^...W...v....#',
+    '#.#.#^#.#.#.#v#.#.#',
+    '#....^<<<<<<<<....#',
+    '#.#.#.#.#.#.#.#.#.#',
+    '#..J...........J..#',
     '#_#.#.#.#_#.#.#.#_#',
     '#S_....._S_....._S#',
     '###################',

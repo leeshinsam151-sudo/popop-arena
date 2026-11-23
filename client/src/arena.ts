@@ -35,6 +35,12 @@ const THEMES: Record<MapId, Theme> = {
     soft: 0xd98c4a, band: { color: 0xa85f2c },
     floor: { Q: 0xcfa865 },
   },
+  park: {
+    fa: 0xfbe9f1, fb: 0xf2e1f6, sky: 0xbfe6ff,
+    wall: { color: 0xff8fab, roughness: 0.5 }, cap: 0xffffff,
+    soft: 0x7ad3ff, band: { color: 0xffd166 }, // 리본 두른 선물 상자
+    floor: { '>': 0x585e70, '<': 0x585e70, '^': 0x585e70, v: 0x585e70, J: 0xffe3ec },
+  },
 };
 
 const G = {
@@ -43,6 +49,13 @@ const G = {
   cyl: new THREE.CylinderGeometry(1, 1, 1, 14),
   cone: new THREE.ConeGeometry(1, 1, 14),
   hemi: new THREE.SphereGeometry(1, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2),
+  arrow: (() => { // 바닥에 눕힌 납작한 화살촉
+    const shape = new THREE.Shape();
+    shape.moveTo(0.18, 0); shape.lineTo(-0.1, 0.16); shape.lineTo(-0.02, 0); shape.lineTo(-0.1, -0.16); shape.closePath();
+    const g = new THREE.ShapeGeometry(shape);
+    g.rotateX(-Math.PI / 2);
+    return g;
+  })(),
   leaf: new THREE.ConeGeometry(1, 1, 4),
   torus: new THREE.TorusGeometry(1, 0.08, 8, 32),
 };
@@ -88,6 +101,11 @@ export class Arena {
   private crackBits!: THREE.InstancedMesh;
   private iceDebrisMat = new THREE.MeshStandardMaterial({ color: 0xbfe8ff, transparent: true, opacity: 0.85 });
   private tick = 0;
+  /** 🎢 벨트 위 화살표 (벨트 방향으로 흘러감) */
+  private belts: { x: number; y: number; dx: number; dy: number }[] = [];
+  private beltArrows!: THREE.InstancedMesh;
+  /** 🎡 대관람차 */
+  private wheels: { wheel: THREE.Object3D; cabins: THREE.Object3D[] }[] = [];
   private fogBase: [number, number] = [30, 60];
   private fogColor = new THREE.Color();
   private bombs = new Map<number, THREE.Group>();
@@ -121,6 +139,8 @@ export class Arena {
     this.spinners = [];
     this.lavaFx = [];
     this.mushrooms.clear();
+    this.belts = [];
+    this.wheels = [];
     this.mapId = mapId;
     this.tiles = '';
     const rows = MAP_ROWS[mapId];
@@ -204,6 +224,55 @@ export class Arena {
           B.add(G.sph, m('canopy', { color: 0x2c7a3a }), x, 1.65, y, 0.85, 0.7, 0.85);
           B.add(G.sph, m('canopy2', { color: 0x3f9a4a }), x - 0.45, 1.45, y + 0.25, 0.5, 0.45, 0.5);
           break;
+        case '>': case '<': case '^': case 'v': {
+          const [dx, dy] = ({ '>': [1, 0], '<': [-1, 0], '^': [0, -1], v: [0, 1] } as Record<string, [number, number]>)[ch];
+          this.belts.push({ x, y, dx, dy });
+          // 벨트 양옆 노란 테두리
+          for (const side of [-1, 1]) {
+            B.add(G.box, m('beltRail', { color: 0xffd166 }), x + (dy ? side * 0.45 : 0), 0.02, y + (dx ? side * 0.45 : 0), dy ? 0.06 : 1, 0.04, dx ? 0.06 : 1, 0, 0, false);
+          }
+          break;
+        }
+        case 'J': { // 🤸 트램펄린: 다리 + 빨강·하양 매트 (누가 뛰면 출렁)
+          for (const [a, c] of [[-0.3, -0.3], [0.3, -0.3], [-0.3, 0.3], [0.3, 0.3]]) B.add(G.cyl, m('tLeg', { color: 0x4a4f5e }), x + a, 0.1, y + c, 0.04, 0.2, 0.04);
+          const top = new THREE.Group();
+          top.position.set(x, 0.22, y);
+          const ring = new THREE.Mesh(G.cyl, m('tRing', { color: 0xff5d73, roughness: 0.4 }));
+          ring.scale.set(0.44, 0.06, 0.44); ring.castShadow = true; top.add(ring);
+          const mat = new THREE.Mesh(G.cyl, m('tMat', { color: 0xffffff, roughness: 0.6 }));
+          mat.scale.set(0.3, 0.07, 0.3); top.add(mat);
+          this.statics.add(top);
+          this.mushrooms.set(`${x},${y}`, { cap: top, squash: 0 });
+          break;
+        }
+        case 'W': { // 🎡 대관람차: 받침대 + 천천히 도는 바퀴 + 항상 똑바로 있는 칸
+          for (const side of [-1, 1]) {
+            const leg = new THREE.Mesh(G.box, m('wLeg', { color: 0xffffff }));
+            leg.position.set(x + side * 0.35, 0.85, y); leg.scale.set(0.1, 1.8, 0.1); leg.rotation.z = side * 0.35; leg.castShadow = true;
+            this.statics.add(leg);
+          }
+          const wheel = new THREE.Group();
+          wheel.position.set(x, 1.75, y);
+          const rim = new THREE.Mesh(G.torus, m('wRim', { color: 0xff8fab, roughness: 0.4 }));
+          rim.scale.setScalar(1.15); wheel.add(rim);
+          const cabins: THREE.Object3D[] = [];
+          const cabColors = [0xff5d73, 0xffd166, 0x7ad3ff, 0x9b5cff, 0x35c46a, 0xff9f43, 0x3d7bff, 0xff7eb6];
+          for (let i = 0; i < 8; i++) {
+            const a = (i / 8) * Math.PI * 2;
+            const spoke = new THREE.Mesh(G.box, m('wSpoke', { color: 0xffffff }));
+            spoke.scale.set(0.04, 1.15, 0.04); spoke.position.set(Math.cos(a) * 0.575, Math.sin(a) * 0.575, 0); spoke.rotation.z = a - Math.PI / 2;
+            wheel.add(spoke);
+            const cab = new THREE.Mesh(G.box, m('cab' + i, { color: cabColors[i], roughness: 0.5 }));
+            cab.scale.set(0.26, 0.24, 0.26); cab.position.set(Math.cos(a) * 1.15, Math.sin(a) * 1.15 - 0.14, 0); cab.castShadow = true;
+            wheel.add(cab);
+            cabins.push(cab);
+          }
+          const hub = new THREE.Mesh(G.sph, m('wHub', { color: 0xffd166 }));
+          hub.scale.setScalar(0.14); wheel.add(hub);
+          this.statics.add(wheel);
+          this.wheels.push({ wheel, cabins });
+          break;
+        }
         case 'O':
           B.add(G.cyl, m('rim', { color: 0xb99a62 }), x, 0.03, y, 0.48, 0.06, 0.48);
           B.add(G.cyl, m('water', { color: 0x3fb8e0, roughness: 0.1 }), x, 0.07, y, 0.4, 0.04, 0.4, 0, 0, false);
@@ -216,6 +285,11 @@ export class Arena {
       }
     }));
     B.flush(this.statics);
+    // 🎢 벨트 화살표: 칸마다 2개, 매 프레임 벨트 방향으로 흘려 보냄
+    this.beltArrows = new THREE.InstancedMesh(G.arrow, new THREE.MeshBasicMaterial({ color: 0xffd166 }), Math.max(1, this.belts.length * 2));
+    this.beltArrows.count = this.belts.length * 2;
+    this.beltArrows.frustumCulled = false;
+    this.statics.add(this.beltArrows);
 
     const fl = new THREE.InstancedMesh(G.box, new THREE.MeshStandardMaterial({ roughness: 0.85 }), floor.length);
     const col = new THREE.Color();
@@ -398,6 +472,24 @@ export class Arena {
         fx.col.visible = false;
         fx.mat.emissiveIntensity = st >= 0 ? 0.6 + st * st * 3 * (0.75 + Math.random() * 0.5) : 0.6;
       }
+    }
+    // 🎢 벨트 화살표 흘러가기 (CONVEYOR_SPEED 1.6칸/초에 맞춤)
+    let ai = 0;
+    for (const b of this.belts) {
+      for (let k = 0; k < 2; k++) {
+        const off = ((t * 1.6 + k * 0.5) % 1) - 0.5;
+        dummy.position.set(b.x + b.dx * off, 0.012, b.y + b.dy * off);
+        dummy.rotation.set(0, Math.atan2(-b.dy, b.dx), 0);
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        this.beltArrows.setMatrixAt(ai++, dummy.matrix);
+      }
+    }
+    if (ai) this.beltArrows.instanceMatrix.needsUpdate = true;
+    // 🎡 대관람차 회전 (칸은 항상 똑바로)
+    for (const w of this.wheels) {
+      w.wheel.rotation.z = t * 0.25;
+      for (const c of w.cabins) c.rotation.z = -w.wheel.rotation.z;
     }
     for (const m of this.mushrooms.values()) {
       if (m.squash <= 0) continue;

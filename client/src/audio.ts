@@ -32,6 +32,7 @@ const SONGS: Record<MusicId, Song> = {
   volcano: { bpm: 138, root: 69, scale: MINOR, prog: [0, 5, 6, 4], lead: 'square', bass: 'sawtooth', drums: 'full', arp: false, seed: 23 },
   forest: { bpm: 100, root: 67, scale: MAJOR, prog: [0, 3, 0, 4], lead: 'sine', bass: 'triangle', drums: 'light', arp: true, seed: 37 },
   desert: { bpm: 116, root: 62, scale: PHRYGIAN_DOM, prog: [0, 0, 6, 1], lead: 'sawtooth', bass: 'triangle', drums: 'tabla', arp: false, seed: 51 },
+  park: { bpm: 128, root: 67, scale: MAJOR, prog: [0, 3, 4, 0], lead: 'square', bass: 'triangle', drums: 'full', arp: true, seed: 61 }, // 🎠 축제
 };
 
 /** 곡마다 고정된 4마디 멜로디 (8분음표 32칸, null = 쉼표) */

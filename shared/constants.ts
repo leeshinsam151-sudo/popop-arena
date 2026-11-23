@@ -6,7 +6,7 @@ export const DT = 1 / TICK_RATE;
 export const MAX_PLAYERS = 6;
 export const FUSE_TICKS = 50; // 2.5초
 export const FLAME_TICKS = 10; // 0.5초
-export const ROUND_TICKS = 150 * TICK_RATE; // 2분 30초
+export const ROUND_TICKS = 300 * TICK_RATE; // 5분
 export const END_TICKS = 4 * TICK_RATE; // 결과 화면 4초
 
 export const BASE_SPEED = 3.4; // 칸/초
@@ -43,6 +43,7 @@ export const LAVA_WARN = 32; // 분출 전 경고 1.6초
 export const LAVA_ERUPT = 16; // 분출 0.8초 (불길과 똑같이 위험)
 export const JUMP_TIME = 0.5; // 🍄 버섯 점프 체공 시간(초)
 export const JUMP_DIST = 2; // 버섯 점프 거리(칸)
+export const CONVEYOR_SPEED = 1.6; // 🎢 컨베이어 벨트가 플레이어·폭탄을 실어 나르는 속도 (칸/초)
 export const SANDSTORM_PERIOD = 45 * TICK_RATE; // 🌪️ 모래폭풍 주기 (연출만)
 export const SANDSTORM_TICKS = 8 * TICK_RATE;
 

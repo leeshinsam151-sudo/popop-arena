@@ -3,7 +3,7 @@
 // 맵 기믹(얼음·유사·버섯·워프·용암 균열·언 상자)도 모두 여기서 판정한다.
 import {
   BASE_SPEED, CORNER_ASSIST, DIR_VEC, Dir, FLAME_TICKS, FUSE_TICKS, ICE_DECEL, ITEM_CHANCE, ITEM_WEIGHTS,
-  BUBBLE_SPEED_MUL, BUBBLE_TICKS, RESCUE_SHIELD_TICKS, TOUCH_DIST,
+  BUBBLE_SPEED_MUL, BUBBLE_TICKS, CONVEYOR_SPEED, RESCUE_SHIELD_TICKS, TOUCH_DIST,
   ItemType, JUMP_DIST, JUMP_TIME, KICK_SPEED, LAVA_CYCLE, LAVA_ERUPT, LAVA_WARN, MAX_BOMBS, MAX_RANGE,
   MAX_SPEED_LV, QUICKSAND_MUL, SOFT_DENSITY, SPEED_STEP, THROW_BOUNCE_TICKS, THROW_DIST, THROW_TICKS, Tile, DT,
 } from './constants.ts';
@@ -69,7 +69,7 @@ export function spawnOrder(w: number, h: number): [number, number][] {
 
 export function tileFromChar(ch: string, rand: () => number): Tile {
   switch (ch) {
-    case '#': case 'T': case 'O': return Tile.Wall;
+    case '#': case 'T': case 'O': case 'W': return Tile.Wall;
     case '~': return Tile.Pit;
     case 'F': return Tile.Frozen;
     case '.': return rand() < SOFT_DENSITY ? Tile.Soft : Tile.Floor;
@@ -92,7 +92,7 @@ function clearArrivalZones(rows: string[], tiles: number[], w: number, h: number
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     const ch = rows[y][x];
     if (ch === 'A' || ch === 'B' || ch === 'C') clearAround(x, y);
-    if (ch === 'M') {
+    if (ch === 'M' || ch === 'J') {
       for (const [dx, dy] of DIR_VEC.slice(1)) {
         const tx = x + dx * JUMP_DIST, ty = y + dy * JUMP_DIST;
         if (tx > 0 && ty > 0 && tx < w - 1 && ty < h - 1) clearAround(tx, ty);
@@ -134,8 +134,12 @@ export function createGame(mapId: MapId, playerIds: string[], rand: () => number
 
 export const playerSpeed = (p: PlayerState) => BASE_SPEED + p.speedLv * SPEED_STEP;
 
-/** 맵 원본 문자 (기믹 판정용: I 얼음, Q 유사, M 버섯, A/B/C 워프, L 용암 균열, G 덤불) */
+/** 맵 원본 문자 (기믹 판정용: I 얼음, Q 유사, M 버섯, J 트램펄린, A/B/C 워프, L 용암 균열, G 덤불, > v < ^ 벨트) */
 export const featureAt = (mapId: MapId, x: number, y: number): string => MAP_ROWS[mapId][y]?.[x] ?? '#';
+
+const BELT: Record<string, Dir> = { '>': Dir.Right, '<': Dir.Left, '^': Dir.Up, 'v': Dir.Down };
+/** 🎢 컨베이어 벨트 방향 (벨트가 아니면 None) */
+export const beltAt = (mapId: MapId, x: number, y: number): Dir => BELT[featureAt(mapId, x, y)] ?? Dir.None;
 
 const warpCache = new Map<string, [number, number]>();
 /** 🌀 같은 글자 워프 석판의 짝 */
@@ -245,8 +249,25 @@ function moveCore(s: GameState, p: PlayerState, dir: Dir, dist: number): number 
 }
 
 /**
+ * 🎢 벨트가 미는 이동: 진행 축으로만 밀고 길 중앙 정렬은 하지 않는다.
+ * (정렬까지 하면 벨트를 가로질러 건너가려는 사람을 계속 벨트 쪽으로 끌어당김)
+ */
+function pushAlong(s: GameState, p: PlayerState, dir: Dir, dist: number) {
+  const [dx, dy] = DIR_VEC[dir];
+  const horiz = dx !== 0;
+  const d = horiz ? dx : dy;
+  const m = horiz ? p.x : p.y;
+  const lane = Math.round(horiz ? p.y : p.x);
+  const base = Math.round(m);
+  const nx = horiz ? base + d : lane, ny = horiz ? lane : base + d;
+  let next = m + d * dist;
+  if (isBlocked(s, nx, ny, p.id)) next = d > 0 ? Math.min(next, Math.max(m, base)) : Math.max(next, Math.min(m, base));
+  if (horiz) p.x = next; else p.y = next;
+}
+
+/**
  * 한 틱 이동 (서버 판정과 클라이언트 예측이 같은 코드 사용).
- * 기믹: 🧊 얼음 관성, 🏜️ 유사 감속, 🍄 버섯 점프, 🌀 워프
+ * 기믹: 🧊 얼음 관성, 🏜️ 유사 감속, 🍄 버섯·🤸 트램펄린 점프, 🌀 워프, 🎢 컨베이어 벨트
  */
 export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): void {
   if (!p.alive) return;
@@ -281,6 +302,10 @@ export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): 
     p.mom = onIce && moved > 1e-6 ? speed : 0;
   }
 
+  // 🎢 벨트 위에 있으면 가만히 있어도 벨트 방향으로 실려 감
+  const belt = beltAt(s.mapId, Math.round(p.x), Math.round(p.y));
+  if (belt !== Dir.None) pushAlong(s, p, belt, CONVEYOR_SPEED * dt);
+
   triggerFeatures(s, p, dir);
 }
 
@@ -291,8 +316,8 @@ function triggerFeatures(s: GameState, p: PlayerState, dir: Dir) {
   const here = featureAt(s.mapId, cx, cy);
   const nearCenter = Math.abs(p.x - cx) < 0.3 && Math.abs(p.y - cy) < 0.3;
 
-  // 🍄 버섯: 누르고 있는 방향으로 2칸 점프 (사이에 있는 벽·블록·폭탄은 넘어감). 착지 칸이 막혀 있으면 안 뜀
-  if (here === 'M' && dir !== Dir.None && nearCenter) {
+  // 🍄 버섯·🤸 트램펄린: 누르고 있는 방향으로 2칸 점프 (사이에 있는 벽·블록·폭탄은 넘어감). 착지 칸이 막혀 있으면 안 뜀
+  if ((here === 'M' || here === 'J') && dir !== Dir.None && nearCenter) {
     const [dx, dy] = DIR_VEC[dir];
     const tx = cx + dx * JUMP_DIST, ty = cy + dy * JUMP_DIST;
     if (!isBlocked(s, tx, ty, p.id) && !groundBombAt(s, tx, ty)) {
@@ -371,18 +396,19 @@ export function bombAction(s: GameState, p: PlayerState): boolean {
   return throwBomb(s, p) || placeBomb(s, p);
 }
 
-/** ⚽ 차인 폭탄을 한 틱 미끄러뜨린다. 앞 칸이 막히면 현재 칸 중심에서 멈춤 */
-function slideBomb(s: GameState, b: Bomb) {
-  const [dx, dy] = DIR_VEC[b.slide];
+/** 폭탄을 dir 방향으로 dist만큼 밀기. 앞 칸이 막히면 현재 칸 중심에서 멈추고 true 반환 */
+function slideStep(s: GameState, b: Bomb, dir: Dir, dist: number): boolean {
+  const [dx, dy] = DIR_VEC[dir];
   const horiz = dx !== 0;
   const d = horiz ? dx : dy;
   const f = horiz ? b.fx : b.fy;
   const c = Math.round(f);
   const ax = horiz ? c + d : b.x, ay = horiz ? b.y : c + d;
-  let nf = f + d * KICK_SPEED * DT;
+  let nf = f + d * dist;
+  let stopped = false;
   if (bombCellBlocked(s, ax, ay, b, true)) {
     nf = d > 0 ? Math.min(nf, Math.max(f, c)) : Math.max(nf, Math.min(f, c));
-    if (nf === c) b.slide = Dir.None;
+    stopped = nf === c;
   }
   if (horiz) b.fx = nf; else b.fy = nf;
   const nc = Math.round(nf);
@@ -390,6 +416,21 @@ function slideBomb(s: GameState, b: Bomb) {
     if (horiz) b.x = nc; else b.y = nc;
     b.passers = [];
   }
+  return stopped;
+}
+
+/** ⚽ 차인 폭탄을 한 틱 미끄러뜨린다 */
+function slideBomb(s: GameState, b: Bomb) {
+  if (slideStep(s, b, b.slide, KICK_SPEED * DT)) b.slide = Dir.None;
+}
+
+/** 🎢 벨트 위 폭탄은 벨트 방향으로 실려 가고, 벨트에서 내려오면 칸 중심까지 마저 이동 */
+function beltBomb(s: GameState, b: Bomb) {
+  const belt = beltAt(s.mapId, b.x, b.y);
+  if (belt !== Dir.None) { slideStep(s, b, belt, CONVEYOR_SPEED * DT); return; }
+  const step = CONVEYOR_SPEED * DT;
+  if (b.fx !== b.x) b.fx = Math.abs(b.x - b.fx) <= step ? b.x : b.fx + Math.sign(b.x - b.fx) * step;
+  if (b.fy !== b.y) b.fy = Math.abs(b.y - b.fy) <= step ? b.y : b.fy + Math.sign(b.y - b.fy) * step;
 }
 
 function applyItem(p: PlayerState, type: ItemType) {
@@ -422,6 +463,7 @@ export function stepWorld(s: GameState, rand: () => number): void {
       continue;
     }
     if (b.slide !== Dir.None) slideBomb(s, b);
+    else beltBomb(s, b);
     b.fuse--;
   }
 
