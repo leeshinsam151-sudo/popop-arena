@@ -1,0 +1,13 @@
+# Render 블루프린트: 저장소 연결 후 "New > Blueprint"로 한 번에 배포
+services:
+  - type: web
+    name: popop-arena
+    runtime: node
+    plan: free          # 무료: 15분 동안 접속이 없으면 잠들고, 첫 접속 때 30~60초 깨어나는 시간이 걸림
+    region: singapore   # 한국에서 가장 가까운 리전
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
