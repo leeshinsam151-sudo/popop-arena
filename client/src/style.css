@@ -137,6 +137,24 @@ kbd { font-family: inherit; padding: 1px 6px; border-radius: 6px; background: rg
 }
 @keyframes pop { from { transform: translate(-50%, -50%) scale(0.6); opacity: 0; } }
 #toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--panel); padding: 10px 18px; border-radius: 999px; }
+/* 💬 채팅: 왼쪽 아래. 닫혀 있으면 최근 메시지만 잠깐 보였다가 흐려짐 */
+#chat { position: fixed; left: 12px; bottom: 54px; width: min(380px, calc(100vw - 24px)); z-index: 6; pointer-events: none; }
+#chat-log { list-style: none; margin: 0 0 6px; padding: 0; display: flex; flex-direction: column; gap: 3px; max-height: 40vh; overflow-y: auto; }
+#chat-log li {
+  align-self: flex-start; max-width: 100%; padding: 4px 10px; border-radius: 12px; font-size: 15px; line-height: 1.35;
+  background: rgba(20, 22, 30, 0.72); word-break: break-word; transition: opacity 0.6s;
+}
+#chat-log li.old { opacity: 0; }
+#chat-log li.system { color: #ffd166; font-size: 13px; background: rgba(20, 22, 30, 0.55); }
+#chat-log .who { margin-right: 6px; }
+#chat.open #chat-log li { opacity: 1; }
+#chat.open #chat-log { pointer-events: auto; background: rgba(20, 22, 30, 0.35); border-radius: 12px; padding: 6px; }
+#chat-input {
+  pointer-events: auto; width: 100%; font: inherit; font-size: 16px; color: var(--text); background: rgba(20, 22, 30, 0.9);
+  border: 2px solid var(--accent); border-radius: 12px; padding: 8px 12px; outline: none;
+}
+#chat-hint { margin: 0; font-size: 12px; color: var(--muted); opacity: 0.8; }
+#chat.open #chat-hint { display: none; }
 #corner { position: fixed; left: 12px; bottom: 10px; display: flex; gap: 6px; align-items: center; z-index: 5; }
 #corner button { width: 34px; height: 34px; border-radius: 50%; background: var(--panel); font-size: 16px; display: grid; place-items: center; }
 #corner button.off { opacity: 0.45; text-decoration: line-through; }

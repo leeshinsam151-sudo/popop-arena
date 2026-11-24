@@ -1,7 +1,7 @@
 import type { WebSocket } from 'ws';
 import { CHARACTERS, DT, Dir, END_TICKS, MAX_PLAYERS, ROUND_TICKS, SUDDEN_TICKS } from '../shared/constants.ts';
 import { MAP_IDS, type MapId } from '../shared/maps.ts';
-import type { ClientMsg, MapPick, MetaPlayer, Mode, Phase, ServerMsg } from '../shared/protocol.ts';
+import { CHAT_MAX, type ClientMsg, type MapPick, type MetaPlayer, type Mode, type Phase, type ServerMsg } from '../shared/protocol.ts';
 import { bombAction, createGame, movePlayer, stepWorld, updatePassers, type GameState } from '../shared/sim.ts';
 import { botThink, newBotMind, type BotMind } from './bot.ts';
 
@@ -20,6 +20,7 @@ interface Client {
   lastB: number; // 마지막으로 받은 폭탄 누적 횟수
   bombPressed: number; // 서버가 처리한 폭탄 누적 횟수
   ack: number;
+  chatTimes: number[]; // 💬 최근 채팅 시각 (도배 방지)
 }
 
 /** 🤖 AI 봇 (사람이 들어오고 나갈 때마다 남는 캐릭터·팀으로 다시 배정) */
@@ -67,11 +68,12 @@ export class Room {
     const team = humans.filter((h) => h.team === 0).length <= humans.filter((h) => h.team === 1).length ? 0 : 1;
     const c: Client = {
       id: randomId(), ws, name, char, team, wins: 0, playing: false,
-      inputs: [], lastB: 0, bombPressed: 0, ack: 0,
+      inputs: [], lastB: 0, bombPressed: 0, ack: 0, chatTimes: [],
     };
     this.clients.set(c.id, c);
     if (!this.host) this.host = c.id;
     this.send(c, { t: 'welcome', id: c.id, room: this.code });
+    this.systemChat(`${name} 님이 들어왔어요`);
     this.refreshLobby();
     if (this.state) this.sendSnapshot(c, this.snapshotBase());
     return c;
@@ -81,6 +83,7 @@ export class Room {
     const c = this.clients.get(id);
     if (!c) return;
     this.clients.delete(id);
+    this.systemChat(`${c.name} 님이 나갔어요`);
     const p = this.state?.players.find((pp) => pp.id === id);
     if (p) p.alive = false;
     if (this.host === id) this.host = this.clients.keys().next().value ?? '';
@@ -161,6 +164,17 @@ export class Room {
           this.refreshLobby();
         }
         break;
+      case 'chat': {
+        // 제어 문자 제거, 공백 정리, 길이 제한. 4초에 4개까지
+        const text = String(msg.text ?? '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, CHAT_MAX);
+        if (!text) return;
+        const now = Date.now();
+        c.chatTimes = c.chatTimes.filter((t) => now - t < 4000);
+        if (c.chatTimes.length >= 4) { this.send(c, { t: 'error', msg: '채팅이 너무 빨라요. 잠시 후 다시 보내 주세요.' }); return; }
+        c.chatTimes.push(now);
+        this.broadcast({ t: 'chat', id: c.id, name: c.name, text });
+        break;
+      }
       case 'sets':
         if (isHost && this.phase === 'lobby' && [1, 2, 3].includes(msg.n)) {
           this.target = msg.n;
@@ -333,6 +347,14 @@ export class Room {
       players, mode: this.mode, bots: this.botCount, result: this.result,
       target: this.target, round: this.round, score: Object.fromEntries(this.score),
     };
+    const text = JSON.stringify(msg);
+    for (const c of this.clients.values()) if (c.ws.readyState === 1) c.ws.send(text);
+  }
+
+  /** 💬 시스템 안내 (입장·퇴장 등) */
+  private systemChat(text: string) { this.broadcast({ t: 'chat', id: null, name: '', text }); }
+
+  private broadcast(msg: ServerMsg) {
     const text = JSON.stringify(msg);
     for (const c of this.clients.values()) if (c.ws.readyState === 1) c.ws.send(text);
   }

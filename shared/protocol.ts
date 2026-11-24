@@ -19,6 +19,7 @@ export type ClientMsg =
   | { t: 'mode'; mode: Mode } // 방장: 개인전/팀전
   | { t: 'team'; team: number } // 내 팀 바꾸기 (0/1)
   | { t: 'sets'; n: number } // 방장: 세트제 (먼저 n승 하면 우승: 1, 2, 3)
+  | { t: 'chat'; text: string } // 💬 채팅
   | { t: 'ping'; c: number }; // 왕복 시간 측정 (c = 클라이언트 시각)
 
 export interface MetaPlayer {
@@ -60,7 +61,9 @@ export type ServerMsg =
       items: Item[];
     }
   | { t: 'pong'; c: number }
+  | { t: 'chat'; id: string | null; name: string; text: string } // 💬 id가 null이면 시스템 안내
   | { t: 'error'; msg: string };
 
 export const ROOM_CODE_RE = /^[a-z0-9]{4,12}$/;
 export const NAME_MAX = 12;
+export const CHAT_MAX = 80;

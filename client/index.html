@@ -75,7 +75,7 @@
     <p class="label">맵 <span class="muted" id="map-hint"></span></p>
     <div id="maps" class="maps"></div>
     <p class="map-desc muted" id="map-desc"></p>
-    <p class="help">이동 <kbd>←↑↓→</kbd> <kbd>WASD</kbd> · 폭탄 <kbd>Space</kbd><br />
+    <p class="help">이동 <kbd>←↑↓→</kbd> <kbd>WASD</kbd> · 폭탄 <kbd>Space</kbd> · 채팅 <kbd>Enter</kbd><br />
       ⚽ 축구화: 폭탄 쪽으로 걸으면 차기 · 🧤 글러브: 폭탄 위에서 <kbd>Space</kbd> 한 번 더 → 던지기</p>
     <div class="lobby-actions">
       <button id="start-btn" class="primary">게임 시작</button>
@@ -93,6 +93,11 @@
   <div id="banner" class="hidden"></div>
   <div id="toast" class="hidden"></div>
   <div id="status" class="hidden"></div>
+  <div id="chat" class="hidden">
+    <ul id="chat-log"></ul>
+    <input id="chat-input" class="hidden" maxlength="80" autocomplete="off" placeholder="메시지 입력 후 Enter · 취소 Esc" />
+    <p id="chat-hint">💬 Enter로 채팅</p>
+  </div>
   <div id="corner">
     <button id="sfx-btn" aria-label="효과음"></button>
     <button id="music-btn" aria-label="배경음"></button>

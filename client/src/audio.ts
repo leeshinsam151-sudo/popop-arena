@@ -5,7 +5,7 @@ import type { MapId } from '../../shared/maps.ts';
 export type Sfx =
   | 'place' | 'explode' | 'pickup' | 'power' | 'kick' | 'throw' | 'land' | 'death'
   | 'warp' | 'boing' | 'lava' | 'crack' | 'tick' | 'start' | 'win' | 'lose' | 'trap' | 'rescue'
-  | 'siren' | 'thud' | 'champion';
+  | 'siren' | 'thud' | 'champion' | 'chat';
 export type MusicId = MapId | 'lobby';
 
 const load = (k: string) => { try { return localStorage.getItem(k) !== '0'; } catch { return true; } };
@@ -235,6 +235,9 @@ export class GameAudio {
       case 'champion': // 🏆 세트 최종 우승 팡파르
         this.notes(o, [523, 523, 523, 698, 880, 784, 880, 1047], 0.13, 0.12, 'square', 0.17);
         this.notes(o, [262, 262, 262, 349, 440, 392, 440, 523], 0.13, 0.12, 'triangle', 0.3);
+        break;
+      case 'chat': // 💬 메시지 도착: 작은 톡
+        this.tone(o, 990, 1320, 0.07, 'sine', 0.18);
         break;
       case 'tick':
         this.tone(o, 1250, 1250, 0.06, 'square', 0.12);

@@ -163,6 +163,7 @@ net.onMessage = (m) => {
     el.textContent = `📶 ${Math.round(rtt)}ms`;
     el.className = rtt < 90 ? 'good' : rtt < 160 ? 'ok' : 'bad';
   }
+  else if (m.t === 'chat') onChat(m);
   else if (m.t === 'error') { toast(m.msg); }
 };
 net.connect();
@@ -536,6 +537,7 @@ function render(now: number, dt: number, alpha: number) {
   }
 
   arena.update(t, dt);
+  updateSpeech(now);
   renderer.render(scene, camera);
 }
 
@@ -658,6 +660,7 @@ paintSound();
 
 function renderUI() {
   $('join').classList.toggle('hidden', joined);
+  $('chat').classList.toggle('hidden', !joined);
   if (!joined) {
     charCards($('join-chars'), myChar, new Set(), (i) => { myChar = i; store.set('popop.char', String(i)); renderUI(); });
     showPreviewInfo();
@@ -883,6 +886,116 @@ if (!meta) {
   arena.setTiles(lobbyTiles('glacier'));
 }
 renderUI();
+
+// ---------- 💬 채팅 ----------
+const chatBox = $('chat'), chatLog = $('chat-log'), chatInput = $<HTMLInputElement>('chat-input');
+const CHAT_KEEP = 30; // 기록 최대 개수
+const CHAT_FADE_MS = 9000; // 채팅창이 닫혀 있으면 이 시간 뒤 흐려짐
+let chatOpen = false;
+
+function openChat() {
+  chatOpen = true;
+  input.setHeld(null); // 캐릭터 멈춤
+  chatBox.classList.add('open');
+  chatInput.classList.remove('hidden');
+  chatInput.value = '';
+  chatInput.focus();
+  chatLog.scrollTop = chatLog.scrollHeight;
+}
+function closeChat() {
+  chatOpen = false;
+  chatBox.classList.remove('open');
+  chatInput.classList.add('hidden');
+  chatInput.blur();
+}
+
+// Enter: 채팅창 열기 (다른 입력칸에 쓰는 중이 아닐 때)
+addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' || !joined || chatOpen || e.isComposing) return;
+  const t = e.target as HTMLElement | null;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')) return;
+  e.preventDefault();
+  openChat();
+});
+chatInput.addEventListener('keydown', (e) => {
+  e.stopPropagation();
+  // 한글 조합 중 Enter는 글자 확정용이라 보내지 않음
+  if (e.isComposing || e.keyCode === 229) return;
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    const text = chatInput.value.trim();
+    if (text) net.send({ t: 'chat', text });
+    closeChat();
+  } else if (e.key === 'Escape') {
+    e.preventDefault();
+    closeChat();
+  }
+});
+chatInput.addEventListener('blur', () => { if (chatOpen) closeChat(); });
+
+function onChat(m: Extract<ServerMsg, { t: 'chat' }>) {
+  const li = document.createElement('li');
+  if (m.id === null) {
+    li.className = 'system';
+    li.textContent = m.text;
+  } else {
+    const mp = metaPlayer(m.id);
+    const who = document.createElement('b');
+    who.className = 'who';
+    who.textContent = m.name + (m.id === myId ? ' (나)' : '');
+    const color = mp ? (mp.team >= 0 ? TEAM_COLORS[mp.team] : CHARACTERS[mp.char].color) : 0xffffff;
+    who.style.color = hex(color);
+    const text = document.createElement('span');
+    text.textContent = m.text;
+    li.append(who, text);
+    showSpeech(m.id, m.text);
+    if (m.id !== myId) audio.play('chat');
+  }
+  chatLog.append(li);
+  while (chatLog.children.length > CHAT_KEEP) chatLog.firstElementChild?.remove();
+  chatLog.scrollTop = chatLog.scrollHeight;
+  setTimeout(() => li.classList.add('old'), CHAT_FADE_MS);
+}
+
+/** 💬 말풍선: 보낸 사람 머리 위에 4초 */
+const speech = new Map<string, { sprite: THREE.Sprite; until: number }>();
+function showSpeech(id: string, text: string) {
+  const av = avatars.get(id);
+  if (!av) return;
+  speech.get(id)?.sprite.removeFromParent();
+  const c = document.createElement('canvas');
+  c.width = 512; c.height = 160;
+  const g = c.getContext('2d')!;
+  g.font = '34px Jua, sans-serif';
+  // 최대 2줄로 자르기
+  const lines: string[] = [];
+  let line = '';
+  for (const ch of text) {
+    if (g.measureText(line + ch).width > 440) { lines.push(line); line = ''; if (lines.length === 2) break; }
+    line += ch;
+  }
+  if (lines.length < 2 && line) lines.push(line);
+  else if (lines.length === 2 && line) lines[1] = lines[1].slice(0, -1) + '…';
+  const w = Math.max(...lines.map((l) => g.measureText(l).width)) + 44;
+  const hgt = lines.length * 42 + 26;
+  const x0 = (512 - w) / 2, y0 = 4;
+  g.fillStyle = 'rgba(255,255,255,0.95)';
+  g.beginPath(); g.roundRect(x0, y0, w, hgt, 20); g.fill();
+  g.beginPath(); g.moveTo(246, y0 + hgt); g.lineTo(256, y0 + hgt + 16); g.lineTo(266, y0 + hgt); g.fill();
+  g.fillStyle = '#22252e'; g.textAlign = 'center'; g.textBaseline = 'middle';
+  lines.forEach((l, i) => g.fillText(l, 256, y0 + 32 + i * 42));
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  sprite.scale.set(3.3, 1.03, 1);
+  sprite.position.y = av.ghost ? 2.9 : 2.55;
+  sprite.renderOrder = 11;
+  av.model.root.add(sprite);
+  speech.set(id, { sprite, until: performance.now() + 4000 });
+}
+function updateSpeech(now: number) {
+  for (const [id, b] of speech) {
+    if (now > b.until || !b.sprite.parent) { b.sprite.removeFromParent(); speech.delete(id); }
+  }
+}
 
 // 개발용: 주소에 ?debug를 붙이면 브라우저 콘솔에서 내부 상태 확인 가능
 if (new URLSearchParams(location.search).has('debug')) {
