@@ -7,7 +7,7 @@ import {
   ItemType, JUMP_DIST, JUMP_TIME, ROUND_TICKS, SUDDEN_SAFE_H, SUDDEN_SAFE_W, SUDDEN_TICKS, KICK_SPEED, LAVA_CYCLE, LAVA_ERUPT, LAVA_WARN, MAX_BOMBS, MAX_RANGE,
   MAX_SPEED_LV, QUICKSAND_MUL, SOFT_DENSITY, SPEED_STEP, THROW_BOUNCE_TICKS, THROW_DIST, THROW_TICKS, Tile, DT,
 } from './constants.ts';
-import { MAP_ROWS, type MapId } from './maps.ts';
+import { MAP_ROWS, layoutOf, type LayoutId, type MapId } from './maps.ts';
 
 export interface PlayerState {
   id: string;
@@ -50,7 +50,8 @@ export interface Flame { x: number; y: number; ttl: number; lava?: boolean }
 export interface Item { x: number; y: number; type: ItemType }
 
 export interface GameState {
-  mapId: MapId;
+  mapId: MapId; // 테마(색·음악·풍경)
+  layout: LayoutId; // 실제 칸 배치 (맵 + 크기): 기믹 판정은 이것 기준
   w: number;
   h: number;
   tiles: number[];
@@ -64,8 +65,9 @@ export interface GameState {
 
 /** 스폰 순서: 2명은 대각선, 4명은 네 모서리, 5~6명째는 위아래 가운데 */
 export function spawnOrder(w: number, h: number): [number, number][] {
-  const cx = Math.floor(w / 2);
-  return [[1, 1], [w - 2, h - 2], [w - 2, 1], [1, h - 2], [cx, 1], [cx, h - 2]];
+  const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
+  // 7~8명째: 좌우 가운데 (큰 맵에만 있음)
+  return [[1, 1], [w - 2, h - 2], [w - 2, 1], [1, h - 2], [cx, 1], [cx, h - 2], [1, cy], [w - 2, cy]];
 }
 
 export function tileFromChar(ch: string, rand: () => number): Tile {
@@ -104,16 +106,17 @@ function clearArrivalZones(rows: string[], tiles: number[], w: number, h: number
 
 /** 팀전 스폰: A팀은 왼쪽, B팀은 오른쪽 */
 export function teamSpawns(w: number, h: number): [number, number][][] {
-  const cx = Math.floor(w / 2);
+  const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
   return [
-    [[1, 1], [1, h - 2], [cx, 1]],
-    [[w - 2, h - 2], [w - 2, 1], [cx, h - 2]],
+    [[1, 1], [1, h - 2], [cx, 1], [1, cy]],
+    [[w - 2, h - 2], [w - 2, 1], [cx, h - 2], [w - 2, cy]],
   ];
 }
 
-/** teams를 주면 팀전 (각 플레이어의 팀 0/1), 없으면 개인전 */
-export function createGame(mapId: MapId, playerIds: string[], rand: () => number, teams?: number[]): GameState {
-  const rows = MAP_ROWS[mapId];
+/** teams를 주면 팀전 (각 플레이어의 팀 0/1), 없으면 개인전. big이면 큰 맵(6~8명) */
+export function createGame(mapId: MapId, playerIds: string[], rand: () => number, teams?: number[], big = false): GameState {
+  const layout = layoutOf(mapId, big);
+  const rows = MAP_ROWS[layout];
   const h = rows.length, w = rows[0].length;
   const tiles: number[] = [];
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) tiles.push(tileFromChar(rows[y][x], rand));
@@ -130,41 +133,41 @@ export function createGame(mapId: MapId, playerIds: string[], rand: () => number
       mom: 0, jump: null, warpLock: false, team, trapped: 0, shield: 0, ghost: false,
     };
   });
-  return { mapId, w, h, tiles, players, bombs: [], flames: [], items: [], tick: 0, nextBombId: 1 };
+  return { mapId, layout, w, h, tiles, players, bombs: [], flames: [], items: [], tick: 0, nextBombId: 1 };
 }
 
 export const playerSpeed = (p: PlayerState) => BASE_SPEED + p.speedLv * SPEED_STEP;
 
 /** 맵 원본 문자 (기믹 판정용: I 얼음, Q 유사, M 버섯, J 트램펄린, A/B/C 워프, L 용암 균열, G 덤불, > v < ^ 벨트) */
-export const featureAt = (mapId: MapId, x: number, y: number): string => MAP_ROWS[mapId][y]?.[x] ?? '#';
+export const featureAt = (layout: LayoutId, x: number, y: number): string => MAP_ROWS[layout][y]?.[x] ?? '#';
 
 const BELT: Record<string, Dir> = { '>': Dir.Right, '<': Dir.Left, '^': Dir.Up, 'v': Dir.Down };
 /** 🎢 컨베이어 벨트 방향 (벨트가 아니면 None) */
-export const beltAt = (mapId: MapId, x: number, y: number): Dir => BELT[featureAt(mapId, x, y)] ?? Dir.None;
+export const beltAt = (layout: LayoutId, x: number, y: number): Dir => BELT[featureAt(layout, x, y)] ?? Dir.None;
 
 const warpCache = new Map<string, [number, number]>();
 /** 🌀 같은 글자 워프 석판의 짝 */
-export function warpPartner(mapId: MapId, x: number, y: number): [number, number] | null {
-  const key = `${mapId}:${x},${y}`;
+export function warpPartner(layout: LayoutId, x: number, y: number): [number, number] | null {
+  const key = `${layout}:${x},${y}`;
   if (warpCache.has(key)) return warpCache.get(key)!;
-  const ch = featureAt(mapId, x, y);
-  const rows = MAP_ROWS[mapId];
+  const ch = featureAt(layout, x, y);
+  const rows = MAP_ROWS[layout];
   for (let yy = 0; yy < rows.length; yy++) for (let xx = 0; xx < rows[yy].length; xx++) {
     if (rows[yy][xx] === ch && (xx !== x || yy !== y)) { warpCache.set(key, [xx, yy]); return [xx, yy]; }
   }
   return null;
 }
 
-const lavaCache = new Map<MapId, [number, number, number][]>();
+const lavaCache = new Map<LayoutId, [number, number, number][]>();
 /** 🌋 용암 균열 칸과 각자의 분출 시점 오프셋 */
-export function lavaCracks(mapId: MapId): [number, number, number][] {
-  let list = lavaCache.get(mapId);
+export function lavaCracks(layout: LayoutId): [number, number, number][] {
+  let list = lavaCache.get(layout);
   if (!list) {
     list = [];
-    MAP_ROWS[mapId].forEach((row, y) => [...row].forEach((ch, x) => {
+    MAP_ROWS[layout].forEach((row, y) => [...row].forEach((ch, x) => {
       if (ch === 'L') list!.push([x, y, (x * 11 + y * 7) % LAVA_CYCLE]);
     }));
-    lavaCache.set(mapId, list);
+    lavaCache.set(layout, list);
   }
   return list;
 }
@@ -285,7 +288,7 @@ export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): 
   }
 
   const cx = Math.round(p.x), cy = Math.round(p.y);
-  const here = featureAt(s.mapId, cx, cy);
+  const here = featureAt(s.layout, cx, cy);
   const onIce = here === 'I';
 
   if (dir === Dir.None) {
@@ -304,7 +307,7 @@ export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): 
   }
 
   // 🎢 벨트 위에 있으면 가만히 있어도 벨트 방향으로 실려 감
-  const belt = beltAt(s.mapId, Math.round(p.x), Math.round(p.y));
+  const belt = beltAt(s.layout, Math.round(p.x), Math.round(p.y));
   if (belt !== Dir.None) pushAlong(s, p, belt, CONVEYOR_SPEED * dt);
 
   triggerFeatures(s, p, dir);
@@ -314,7 +317,7 @@ export function movePlayer(s: GameState, p: PlayerState, dir: Dir, dt: number): 
 function triggerFeatures(s: GameState, p: PlayerState, dir: Dir) {
   if (p.trapped) return; // 물방울 안에서는 버섯·워프 안 탐
   const cx = Math.round(p.x), cy = Math.round(p.y);
-  const here = featureAt(s.mapId, cx, cy);
+  const here = featureAt(s.layout, cx, cy);
   const nearCenter = Math.abs(p.x - cx) < 0.3 && Math.abs(p.y - cy) < 0.3;
 
   // 🍄 버섯·🤸 트램펄린: 누르고 있는 방향으로 2칸 점프 (사이에 있는 벽·블록·폭탄은 넘어감). 착지 칸이 막혀 있으면 안 뜀
@@ -332,7 +335,7 @@ function triggerFeatures(s: GameState, p: PlayerState, dir: Dir) {
   const isWarp = here === 'A' || here === 'B' || here === 'C';
   if (!isWarp) { p.warpLock = false; return; }
   if (!p.warpLock && nearCenter) {
-    const to = warpPartner(s.mapId, cx, cy);
+    const to = warpPartner(s.layout, cx, cy);
     if (to && !isBlocked(s, to[0], to[1], p.id)) {
       p.x = to[0]; p.y = to[1];
       p.mom = 0;
@@ -457,7 +460,7 @@ function slideBomb(s: GameState, b: Bomb) {
 
 /** 🎢 벨트 위 폭탄은 벨트 방향으로 실려 가고, 벨트에서 내려오면 칸 중심까지 마저 이동 */
 function beltBomb(s: GameState, b: Bomb) {
-  const belt = beltAt(s.mapId, b.x, b.y);
+  const belt = beltAt(s.layout, b.x, b.y);
   if (belt !== Dir.None) { slideStep(s, b, belt, CONVEYOR_SPEED * DT); return; }
   const step = CONVEYOR_SPEED * DT;
   if (b.fx !== b.x) b.fx = Math.abs(b.x - b.fx) <= step ? b.x : b.fx + Math.sign(b.x - b.fx) * step;
@@ -487,7 +490,7 @@ function rollItem(rand: () => number): ItemType {
 /** 이동 이후 세계를 한 틱 진행: 폭탄 비행·미끄러짐, 불길 소멸, 폭발(연쇄), 블록 파괴, 사망, 아이템 획득 */
 export function stepWorld(s: GameState, rand: () => number): void {
   s.tick++;
-  const drop = suddenDropAt(s.mapId, s.tick);
+  const drop = suddenDropAt(s.layout, s.tick);
   if (drop) dropWall(s, drop[0], drop[1]);
   s.flames = s.flames.filter((f) => --f.ttl > 0);
   for (const b of s.bombs) {
@@ -507,7 +510,7 @@ export function stepWorld(s: GameState, rand: () => number): void {
   };
 
   // 🌋 용암 균열 분출: 분출 중인 칸은 불길과 똑같이 위험 (폭탄도 터뜨림)
-  for (const [x, y, off] of lavaCracks(s.mapId)) {
+  for (const [x, y, off] of lavaCracks(s.layout)) {
     if (lavaState(s.tick, off) !== 2) continue;
     const f = s.flames.find((ff) => ff.x === x && ff.y === y);
     if (f) f.ttl = Math.max(f.ttl, 2); else s.flames.push({ x, y, ttl: 2, lava: true });
@@ -586,16 +589,16 @@ function resolveBubbles(s: GameState) {
   }
 }
 
-const suddenCache = new Map<MapId, { cells: [number, number][]; interval: number; start: number }>();
+const suddenCache = new Map<LayoutId, { cells: [number, number][]; interval: number; start: number }>();
 /**
  * ⚠️ 서든데스 일정: 바깥 테두리부터 시계 방향 나선으로 안쪽까지, 떨어질 칸 순서와 간격(틱).
  * 고정 벽 칸은 건너뛰고, 가운데 구역은 남김. 판 끝나기 5초 전에 다 떨어지도록 간격을 정함.
  * 서버(판정)와 클라이언트(경고 표시)가 같은 일정을 계산한다.
  */
-export function suddenSchedule(mapId: MapId) {
-  let sch = suddenCache.get(mapId);
+export function suddenSchedule(layout: LayoutId) {
+  let sch = suddenCache.get(layout);
   if (sch) return sch;
-  const rows = MAP_ROWS[mapId];
+  const rows = MAP_ROWS[layout];
   const h = rows.length, w = rows[0].length;
   const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
   const cells: [number, number][] = [];
@@ -615,13 +618,13 @@ export function suddenSchedule(mapId: MapId) {
   const start = ROUND_TICKS - SUDDEN_TICKS;
   const interval = Math.max(1, Math.floor((SUDDEN_TICKS - 5 * 20) / Math.max(1, cells.length)));
   sch = { cells, interval, start };
-  suddenCache.set(mapId, sch);
+  suddenCache.set(layout, sch);
   return sch;
 }
 
 /** 이번 틱에 떨어지는 칸 (없으면 null) */
-export function suddenDropAt(mapId: MapId, tick: number): [number, number] | null {
-  const { cells, interval, start } = suddenSchedule(mapId);
+export function suddenDropAt(layout: LayoutId, tick: number): [number, number] | null {
+  const { cells, interval, start } = suddenSchedule(layout);
   const k = tick - start;
   if (k < 0 || k % interval !== 0) return null;
   return cells[k / interval] ?? null;

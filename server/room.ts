@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import { CHARACTERS, DT, Dir, END_TICKS, MAX_PLAYERS, ROUND_TICKS, SUDDEN_TICKS } from '../shared/constants.ts';
+import { BIG_MAP_PLAYERS, CHARACTERS, DT, Dir, END_TICKS, MAX_PLAYERS, ROUND_TICKS, SUDDEN_TICKS } from '../shared/constants.ts';
 import { MAP_IDS, type MapId } from '../shared/maps.ts';
 import { CHAT_MAX, type ClientMsg, type MapPick, type MetaPlayer, type Mode, type Phase, type ServerMsg } from '../shared/protocol.ts';
 import { bombAction, createGame, movePlayer, stepWorld, updatePassers, type GameState } from '../shared/sim.ts';
@@ -112,7 +112,7 @@ export class Room {
 
   private teamPossible() {
     const total = this.humans().length + this.botCount;
-    return total >= 4 && total % 2 === 0;
+    return total >= 4 && total % 2 === 0; // 2:2, 3:3, 4:4
   }
 
   onMessage(id: string, msg: ClientMsg) {
@@ -157,7 +157,7 @@ export class Room {
       case 'mode':
         if (isHost && this.phase === 'lobby' && (msg.mode === 'solo' || msg.mode === 'team')) {
           if (msg.mode === 'team' && !this.teamPossible()) {
-            this.send(c, { t: 'error', msg: '팀전은 사람과 봇을 합쳐 4명 또는 6명일 때 할 수 있어요.' });
+            this.send(c, { t: 'error', msg: '팀전은 사람과 봇을 합쳐 4명, 6명 또는 8명일 때 할 수 있어요.' });
             return;
           }
           this.mode = msg.mode;
@@ -222,7 +222,7 @@ export class Room {
       c.bombPressed = c.lastB; // 라운드 전에 누른 폭탄은 무시
     }
     if (this.pick === 'random') this.mapId = MAP_IDS[Math.floor(Math.random() * MAP_IDS.length)];
-    this.state = createGame(this.mapId, ids, Math.random, teams);
+    this.state = createGame(this.mapId, ids, Math.random, teams, ids.length >= BIG_MAP_PLAYERS);
     this.minds = new Map(ids.filter((id) => id.startsWith('bot-')).map((id) => [id, newBotMind()]));
     this.round++;
     if (process.env.DEV_ITEMS === '1') devItems(this.state);
@@ -344,6 +344,8 @@ export class Room {
     ];
     const msg: ServerMsg = {
       t: 'meta', host: this.host, phase: this.phase, pick: this.pick, mapId: this.mapId,
+      // 진행 중이면 실제 판의 크기, 대기실이면 지금 인원 기준 미리보기
+      big: this.state ? this.state.layout.endsWith('-xl') : this.humans().length + this.botCount >= BIG_MAP_PLAYERS,
       players, mode: this.mode, bots: this.botCount, result: this.result,
       target: this.target, round: this.round, score: Object.fromEntries(this.score),
     };

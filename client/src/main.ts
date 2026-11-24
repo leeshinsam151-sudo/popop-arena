@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import './style.css';
 import { BUBBLE_TICKS, CHARACTERS, DT, Dir, MAX_PLAYERS, SANDSTORM_PERIOD, SANDSTORM_TICKS, SUDDEN_TICKS, TEAM_COLORS, TEAM_NAMES, TICK_RATE } from '../../shared/constants.ts';
-import { MAP_IDS, MAP_NAMES, type MapId } from '../../shared/maps.ts';
+import { MAP_IDS, MAP_NAMES, layoutOf, type MapId } from '../../shared/maps.ts';
 import type { MetaPlayer, ServerMsg } from '../../shared/protocol.ts';
 import { featureAt, spawnOrder, teamSpawns, movePlayer, updatePassers, type GameState, type PlayerState } from '../../shared/sim.ts';
 import { Arena } from './arena.ts';
@@ -49,7 +49,7 @@ sun.position.set(17, 26, 19);
 sun.target.position.set(9, 0, 7);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
-Object.assign(sun.shadow.camera, { left: -13, right: 13, top: 13, bottom: -13, far: 80 });
+Object.assign(sun.shadow.camera, { left: -16, right: 16, top: 16, bottom: -16, far: 80 });
 sun.shadow.bias = -0.0006;
 scene.add(sun, sun.target);
 
@@ -185,10 +185,10 @@ function onMeta(m: Meta) {
   if (m.phase === 'playing' && prev !== 'playing') {
     snaps.length = 0; pred = null; pending = []; lastFlames = 0;
     clearAvatars();
-    arena.build(m.mapId);
+    arena.build(m.mapId, layoutOf(m.mapId, m.big));
   }
   if (m.phase === 'lobby') {
-    if (prev && prev !== 'lobby') { snaps.length = 0; pred = null; clearAvatars(); arena.mapId = null; }
+    if (prev && prev !== 'lobby') { snaps.length = 0; pred = null; clearAvatars(); arena.layout = null; }
     showLobbyScene();
   }
   renderUI();
@@ -197,9 +197,10 @@ function onMeta(m: Meta) {
 /** 로비: 선택된 맵을 블록 없이 보여 주고 참가자를 스폰 위치에 세움 */
 function showLobbyScene() {
   if (!meta) return;
-  if (arena.mapId !== meta.mapId) {
-    arena.build(meta.mapId);
-    arena.setTiles(lobbyTiles(meta.mapId));
+  const layout = layoutOf(meta.mapId, meta.big);
+  if (arena.layout !== layout) { // 맵을 바꾸거나 인원이 6명을 넘나들면 다시 그림
+    arena.build(meta.mapId, layout);
+    arena.setTiles(lobbyTiles(layout));
   }
   const lobbyIds = new Set<string>();
   const spawns = spawnOrder(arena.w, arena.h);
@@ -220,7 +221,7 @@ function showLobbyScene() {
 
 function onSnap(s: Snap) {
   if (!meta) return;
-  if (arena.mapId !== meta.mapId) arena.build(meta.mapId);
+  if (arena.layout !== layoutOf(meta.mapId, meta.big)) arena.build(meta.mapId, layoutOf(meta.mapId, meta.big));
   const prevSnap = snaps.at(-1)?.s;
   if (prevSnap) snapEvents(prevSnap, s);
   snaps.push({ at: performance.now(), s });
@@ -237,7 +238,7 @@ function onSnap(s: Snap) {
   if (me) {
     pending = pending.filter((p) => p.s > s.ack);
     const st: GameState = {
-      mapId: meta.mapId, w: arena.w, h: arena.h, tiles: [...s.tiles].map(Number),
+      mapId: meta.mapId, layout: layoutOf(meta.mapId, meta.big), w: arena.w, h: arena.h, tiles: [...s.tiles].map(Number),
       players: [{ ...me }], bombs: s.bombs.map((b) => ({ ...b, passers: [...b.passers] })),
       flames: [], items: [], tick: s.tick, nextBombId: 0,
     };
@@ -473,7 +474,7 @@ function render(now: number, dt: number, alpha: number) {
       av.model.root.position.set(x, h, y);
       av.last = { x, y };
       // 🌲 덤불 속: 다른 사람에게는 거의 안 보이고 이름표도 숨김, 나는 반투명
-      const inBush = p.alive && meta.mapId === 'forest' && featureAt(meta.mapId, Math.round(x), Math.round(y)) === 'G' && h === 0;
+      const inBush = p.alive && meta.mapId === 'forest' && featureAt(layoutOf(meta.mapId, meta.big), Math.round(x), Math.round(y)) === 'G' && h === 0;
       if (p.alive) av.model.setOpacity(inBush ? (p.id === myId ? 0.5 : 0.12) : 1);
       if (p.alive) av.label.visible = !inBush || p.id === myId;
       av.model.animate(t, dt, moving && p.alive && !p.trapped);
@@ -536,6 +537,9 @@ function render(now: number, dt: number, alpha: number) {
     updateSandstorm(-1, dt);
   }
 
+  // 해(그림자)는 맵 가운데 기준 (큰 맵이면 가운데가 달라짐)
+  sun.target.position.set(cx, 0, cy);
+  sun.position.set(cx + 8, 26, cy + 12);
   arena.update(t, dt);
   updateSpeech(now);
   renderer.render(scene, camera);
@@ -726,7 +730,7 @@ function renderUI() {
   });
   $('mode-hint').textContent = m.mode === 'team'
     ? '🫧 맞으면 물방울에 갇혀요. 같은 팀이 닿으면 구출, 상대가 닿거나 5초가 지나면 탈락!'
-    : teamOk ? '' : '팀전은 사람과 봇을 합쳐 4명 또는 6명일 때 고를 수 있어요';
+    : teamOk ? '' : '팀전은 사람과 봇을 합쳐 4명, 6명 또는 8명일 때 고를 수 있어요';
   $('sets-seg').querySelectorAll<HTMLButtonElement>('button').forEach((b) => {
     b.classList.toggle('on', Number(b.dataset.sets) === m.target);
     b.disabled = !isHost;

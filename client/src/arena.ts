@@ -1,7 +1,7 @@
 // 맵·폭탄·불길·아이템 렌더링. 좌표계: 칸 (x, y) → 월드 (X = x, Z = y)
 import * as THREE from 'three';
 import { ItemType, Tile } from '../../shared/constants.ts';
-import { MAP_ROWS, type MapId } from '../../shared/maps.ts';
+import { MAP_ROWS, type LayoutId, type MapId } from '../../shared/maps.ts';
 import { lavaCracks, lavaState, suddenSchedule, type Bomb, type Flame, type Item } from '../../shared/sim.ts';
 import { SUDDEN_WARN } from '../../shared/constants.ts';
 import { buildScenery, type Scenery } from './scenery.ts';
@@ -86,7 +86,8 @@ class Batcher {
 
 export class Arena {
   readonly group = new THREE.Group();
-  mapId: MapId | null = null;
+  mapId: MapId | null = null; // 테마
+  layout: LayoutId | null = null; // 칸 배치 (맵 + 크기)
   w = 0; h = 0;
   private statics = new THREE.Group();
   private softBody!: THREE.InstancedMesh;
@@ -142,7 +143,8 @@ export class Arena {
   }
 
   /** 맵 정적 요소(바닥·벽·장식) 생성 */
-  build(mapId: MapId) {
+  /** layout을 생략하면 일반 크기 */
+  build(mapId: MapId, layout: LayoutId = mapId) {
     this.clearDynamic();
     this.statics.clear();
     this.spinners = [];
@@ -151,8 +153,9 @@ export class Arena {
     this.belts = [];
     this.wheels = [];
     this.mapId = mapId;
+    this.layout = layout;
     this.tiles = '';
-    const rows = MAP_ROWS[mapId];
+    const rows = MAP_ROWS[layout];
     const th = THEMES[mapId];
     this.h = rows.length; this.w = rows[0].length;
     this.scene.background = new THREE.Color(th.sky);
@@ -199,7 +202,7 @@ export class Arena {
           const col = new THREE.Mesh(G.cone, new THREE.MeshBasicMaterial({ color: 0xffb020, transparent: true, opacity: 0.85, side: THREE.DoubleSide }));
           col.position.set(x, 0.8, y); col.rotation.x = Math.PI; col.visible = false;
           this.statics.add(col);
-          const off = lavaCracks(mapId).find(([lx, ly]) => lx === x && ly === y)?.[2] ?? 0;
+          const off = lavaCracks(layout).find(([lx, ly]) => lx === x && ly === y)?.[2] ?? 0;
           this.lavaFx.push({ off, mat: cm, col });
           break;
         }
@@ -535,8 +538,8 @@ export class Arena {
       for (const c of w.cabins) c.rotation.z = -w.wheel.rotation.z;
     }
     // ⚠️ 서든데스: 곧 떨어질 칸을 빨갛게 깜빡임, 떨어지는 중인 벽 애니메이션
-    if (this.mapId && this.warnTiles) {
-      const sd = suddenSchedule(this.mapId);
+    if (this.layout && this.warnTiles) {
+      const sd = suddenSchedule(this.layout);
       let wi = 0;
       if (this.tick >= sd.start - SUDDEN_WARN) {
         const from = Math.max(0, Math.ceil((this.tick - sd.start) / sd.interval));

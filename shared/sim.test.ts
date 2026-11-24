@@ -383,3 +383,35 @@ test('👻 유령은 경기장 밖에서만 움직이고, 안으로 들어가려
   press(s, p, Dir.Left, 200);
   assert.ok(p.x >= -1 - 4.5 - 1e-9, 'cannot wander too far');
 });
+
+// ---------- 8인·큰 맵 ----------
+test('8명: 큰 맵(23x17)에서 8곳 스폰이 모두 다르고 비어 있다 (개인전·4:4 팀전)', () => {
+  const ids = Array.from({ length: 8 }, (_, i) => 'p' + i);
+  for (const mapId of ['glacier', 'volcano', 'forest', 'desert', 'park'] as const) {
+    for (const teams of [undefined, [0, 1, 0, 1, 0, 1, 0, 1]]) {
+      const s = createGame(mapId, ids, seededRandom(3), teams, true);
+      assert.equal(s.layout, `${mapId}-xl`);
+      assert.deepEqual([s.w, s.h], [23, 17]);
+      const spots = new Set(s.players.map((p) => `${p.x},${p.y}`));
+      assert.equal(spots.size, 8, `${mapId}: spawns overlap`);
+      for (const p of s.players) {
+        assert.equal(s.tiles[p.y * s.w + p.x], Tile.Floor, `${mapId}: spawn (${p.x},${p.y}) blocked`);
+        // 스폰 옆에 최소 한 칸은 비어 있어서 폭탄을 놓고 피할 수 있음
+        const open = [[1, 0], [-1, 0], [0, 1], [0, -1]].filter(([dx, dy]) => s.tiles[(p.y + dy) * s.w + p.x + dx] === Tile.Floor);
+        assert.ok(open.length >= 1, `${mapId}: spawn (${p.x},${p.y}) has no free neighbor`);
+      }
+      if (teams) {
+        assert.ok(s.players.filter((p) => p.team === 0).every((p) => p.x <= 11), 'A team on the left');
+        assert.ok(s.players.filter((p) => p.team === 1).every((p) => p.x >= 11), 'B team on the right');
+      }
+    }
+  }
+});
+
+test('⚠️ 큰 맵에서도 서든데스가 판 끝나기 전에 끝나고 가운데는 남는다', () => {
+  for (const mapId of ['glacier', 'volcano', 'forest', 'desert', 'park'] as const) {
+    const { cells, interval, start } = suddenSchedule(`${mapId}-xl`);
+    assert.ok(start + interval * cells.length <= ROUND_TICKS - 4 * 20);
+    assert.ok(!cells.some(([x, y]) => x === 11 && y === 8));
+  }
+});

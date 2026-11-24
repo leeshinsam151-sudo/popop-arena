@@ -3,7 +3,8 @@ export const TICK_RATE = 20;
 export const TICK_MS = 1000 / TICK_RATE;
 export const DT = 1 / TICK_RATE;
 
-export const MAX_PLAYERS = 6;
+export const MAX_PLAYERS = 8;
+export const BIG_MAP_PLAYERS = 6; // 참가자가 이 수 이상이면 큰 맵 (23x17)
 export const FUSE_TICKS = 50; // 2.5초
 export const FLAME_TICKS = 10; // 0.5초
 export const ROUND_TICKS = 300 * TICK_RATE; // 5분
@@ -97,4 +98,6 @@ export const CHARACTERS = [
   { id: 'volt', name: '볼트', color: 0xffc531, desc: '꼬마 로봇 · 계산적인 발명가' },
   { id: 'mia', name: '미야', color: 0x9b5cff, desc: '고양이 후드 · 못 말리는 장난꾸러기' },
   { id: 'koko', name: '코코', color: 0xff7eb6, desc: '토끼 · 늘 신나는 명랑 담당' },
+  { id: 'tori', name: '토리', color: 0xff8c2e, desc: '여우 · 꾀 많은 복슬꼬리' },
+  { id: 'gureum', name: '구름', color: 0x2ec4b6, desc: '구름 양 · 폭신폭신 느림보' },
 ] as const;

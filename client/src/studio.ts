@@ -1,14 +1,14 @@
 // 미리보기 스튜디오: 캐릭터·맵 썸네일 생성, 입장 화면의 캐릭터 3D 미리보기
 import * as THREE from 'three';
 import { CHARACTERS } from '../../shared/constants.ts';
-import { MAP_IDS, MAP_ROWS, type MapId } from '../../shared/maps.ts';
+import { MAP_IDS, MAP_ROWS, type LayoutId, type MapId } from '../../shared/maps.ts';
 import { tileFromChar } from '../../shared/sim.ts';
 import { Arena } from './arena.ts';
 import { createCharacter, type CharacterModel } from './characters.ts';
 
 /** 블록 없이 맵 지형만 있는 타일 문자열 (로비·썸네일용) */
-export const lobbyTiles = (id: MapId) =>
-  MAP_ROWS[id].join('').split('').map((ch) => tileFromChar(ch, () => 1)).join('');
+export const lobbyTiles = (layout: LayoutId) =>
+  MAP_ROWS[layout].join('').split('').map((ch) => tileFromChar(ch, () => 1)).join('');
 
 export class Studio {
   readonly canvas = document.createElement('canvas');

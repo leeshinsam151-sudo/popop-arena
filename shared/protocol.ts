@@ -40,6 +40,7 @@ export type ServerMsg =
       phase: Phase;
       pick: MapPick; // 방장이 고른 맵 (랜덤 포함)
       mapId: MapId; // 실제로 쓰는 맵 (진행 중인 판, 또는 로비 미리보기)
+      big: boolean; // 큰 맵(23x17)인지: 참가자 6명 이상
       players: MetaPlayer[]; // 사람 + 봇 (봇은 bot: true)
       mode: Mode;
       bots: number; // 방장이 정한 봇 수

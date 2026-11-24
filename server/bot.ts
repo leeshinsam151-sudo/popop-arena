@@ -34,7 +34,7 @@ function dangerMap(s: GameState, extra?: { x: number; y: number; range: number }
       let x = b.x, y = b.y;
       const steps = Math.ceil((t / TICK_RATE) * CONVEYOR_SPEED) + 1;
       for (let i = 0; i < steps; i++) {
-        const dir = beltAt(s.mapId, x, y);
+        const dir = beltAt(s.layout, x, y);
         if (dir === Dir.None) break;
         const [dx, dy] = DIR_VEC[dir];
         if (isBlocked(s, x + dx, y + dy, '')) break;
@@ -74,16 +74,16 @@ function dangerMap(s: GameState, extra?: { x: number; y: number; range: number }
   bombs.forEach((b, i) => { for (const c of blasts[i]) danger[c] = Math.min(danger[c], b.t); });
 
   // ⚠️ 서든데스: 곧 벽이 떨어질 칸 (2초 앞까지)
-  const sd = suddenSchedule(s.mapId);
+  const sd = suddenSchedule(s.layout);
   if (s.tick + 40 >= sd.start) {
     for (let k = 0; k <= 40; k++) {
-      const cell = suddenDropAt(s.mapId, s.tick + k);
+      const cell = suddenDropAt(s.layout, s.tick + k);
       if (cell) danger[cell[1] * s.w + cell[0]] = Math.min(danger[cell[1] * s.w + cell[0]], k);
     }
   }
 
   // 🌋 곧 분출할 용암 균열
-  for (const [x, y, off] of lavaCracks(s.mapId)) {
+  for (const [x, y, off] of lavaCracks(s.layout)) {
     const ph = (s.tick + off) % LAVA_CYCLE;
     const until = ph < LAVA_WARN ? LAVA_WARN - ph : ph < LAVA_WARN + 16 ? 0 : LAVA_CYCLE - ph + LAVA_WARN;
     if (until < 30) danger[y * s.w + x] = Math.min(danger[y * s.w + x], until);
@@ -107,7 +107,7 @@ function bfs(s: GameState, me: PlayerState, passable: (idx: number, dist: number
       const nx = cx + dx, ny = cy + dy, ni = ny * s.w + nx;
       if (seen.has(ni) || isBlocked(s, nx, ny, me.id)) continue;
       // 워프·버섯·트램펄린은 엉뚱한 곳으로 보내 버리니 봇은 밟지 않음
-      if ('ABCMJ'.includes(featureAt(s.mapId, nx, ny))) continue;
+      if ('ABCMJ'.includes(featureAt(s.layout, nx, ny))) continue;
       if (!passable(ni, cur.dist + 1)) continue;
       seen.add(ni);
       out.push({ idx: ni, dist: cur.dist + 1, first: cur.first === Dir.None ? (d as Dir) : cur.first });
@@ -168,7 +168,7 @@ export function botThink(s: GameState, me: PlayerState, mind: BotMind): { dir: D
   }
   if (me.trapped) return { dir: Dir.None, bomb: false };
 
-  const sd = suddenSchedule(s.mapId);
+  const sd = suddenSchedule(s.layout);
   // 3) 안전한 칸으로만 다니며 갈 수 있는 곳 탐색
   const nodes = bfs(s, me, (idx) => danger[idx] === SAFE);
   const myBombs = s.bombs.filter((b) => b.owner === me.id).length;
@@ -194,7 +194,7 @@ export function botThink(s: GameState, me: PlayerState, mind: BotMind): { dir: D
     if (s.tick >= sd.start - 100) { // ⚠️ 서든데스 직전부터는 가운데로 모이기
       score -= (Math.abs(x - (s.w - 1) / 2) + Math.abs(y - (s.h - 1) / 2)) * 1.5;
     }
-    if (beltAt(s.mapId, x, y) !== Dir.None) score -= 3; // 벨트 위에 서 있으면 엉뚱한 데로 실려 감
+    if (beltAt(s.layout, x, y) !== Dir.None) score -= 3; // 벨트 위에 서 있으면 엉뚱한 데로 실려 감
     if (s.items.some((it) => it.x === x && it.y === y)) score += 14;
     if (canBomb) score += Math.max(0, bombValue(s, me, x, y)) * 4;
     for (const p of s.players) {

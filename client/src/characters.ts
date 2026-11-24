@@ -45,6 +45,7 @@ export function createCharacter(index: number): CharacterModel {
   const bodyScale = def.id === 'dung' ? 1.15 : 1;
   const bellyColor: Record<string, number> = {
     pop: 0xffb199, dung: 0xbfd4ff, leaf: 0xc9f2c0, volt: 0x4a4f5e, mia: 0xe0ccff, koko: 0xfff0f6,
+    tori: 0xfff3e0, gureum: 0xffffff,
   };
 
   mesh(sph, cm, body, [0, 0.42, 0], [0.32 * bodyScale, 0.3, 0.28 * bodyScale]);
@@ -127,6 +128,35 @@ export function createCharacter(index: number): CharacterModel {
     earR.rotation.z = -0.55; earL.rotation.z = 0.12;
     wiggle = earR;
     mesh(sph, inner, body, [0, 0.3, -0.27], [0.1, 0.1, 0.1]);
+  } else if (def.id === 'tori') {
+    // 🦊 여우: 뾰족한 귀(끝이 검정), 하얀 주둥이, 위로 말린 복슬복슬한 꼬리
+    const cream = mat(0xfff3e0), black = mat(0x2a2024);
+    for (const sx of [-1, 1]) {
+      mesh(new THREE.ConeGeometry(0.11, 0.3, 4), cm, head, [sx * 0.2, 0.36, -0.02], [1, 1, 0.55], [0, Math.PI / 4, -sx * 0.3]);
+      mesh(new THREE.ConeGeometry(0.045, 0.1, 4), black, head, [sx * 0.245, 0.48, -0.02], [1, 1, 0.55], [0, Math.PI / 4, -sx * 0.3]);
+    }
+    mesh(sph, cream, head, [0, -0.1, 0.3], [0.17, 0.11, 0.1]);
+    mesh(sph, black, head, [0, -0.06, 0.39], [0.04, 0.03, 0.03]);
+    const tail = new THREE.Group();
+    tail.position.set(0, 0.32, -0.24);
+    body.add(tail);
+    const fluff = [[0, 0.02, -0.08, 0.13], [0, 0.14, -0.2, 0.15], [0, 0.3, -0.26, 0.15], [0, 0.45, -0.24, 0.12]];
+    fluff.forEach(([x, y, z, r], i) => mesh(sph, i === 3 ? cream : cm, tail, [x, y, z], [r, r, r]));
+    wiggle = tail;
+  } else if (def.id === 'gureum') {
+    // 🐑 구름 양: 머리 위 폭신한 양털 뭉치, 양옆으로 말린 뿔, 엉덩이에도 양털
+    const wool = mat(0xffffff, { roughness: 0.95 }), hornMat = mat(0xd9c3a0);
+    const tuft = new THREE.Group();
+    tuft.position.y = 0.3;
+    head.add(tuft);
+    for (const [x, y, z, r] of [[0, 0.06, 0, 0.17], [-0.16, 0, 0.02, 0.13], [0.16, 0, 0.02, 0.13], [-0.08, 0.02, 0.14, 0.11], [0.08, 0.02, 0.14, 0.11], [0, 0.02, -0.14, 0.12]]) {
+      mesh(sph, wool, tuft, [x, y, z], [r, r * 0.85, r]);
+    }
+    for (const sx of [-1, 1]) {
+      mesh(new THREE.TorusGeometry(0.1, 0.035, 8, 16, Math.PI * 1.5), hornMat, head, [sx * 0.36, 0.08, -0.02], [1, 1, 1], [0, sx * Math.PI / 2, 0]);
+    }
+    for (const [x, y, z, r] of [[0, 0.5, -0.24, 0.13], [-0.18, 0.4, -0.18, 0.11], [0.18, 0.4, -0.18, 0.11]]) mesh(sph, wool, body, [x, y, z], [r, r, r]);
+    wiggle = tuft;
   }
 
   // 발밑 색 링 (혼전 중 식별용)
@@ -183,6 +213,8 @@ export function createCharacter(index: number): CharacterModel {
         else if (def.id === 'leaf') wiggle.rotation.z = Math.sin(t * 2.2) * 0.15;
         else if (def.id === 'mia') wiggle.rotation.y = Math.sin(t * 2 + phase) * 0.35;
         else if (def.id === 'koko') wiggle.rotation.z = -0.55 + Math.sin(t * 2.4) * 0.12;
+        else if (def.id === 'tori') { wiggle.rotation.x = Math.sin(t * 3 + phase) * 0.18; wiggle.rotation.z = Math.sin(t * 2 + phase) * 0.15; }
+        else if (def.id === 'gureum') wiggle.scale.setScalar(1 + Math.sin(t * 2.5 + phase) * 0.05);
       }
     },
     die() { if (dying < 0) dying = 0; },

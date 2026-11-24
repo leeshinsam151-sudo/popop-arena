@@ -39,7 +39,7 @@ h1 { margin: 0; font-size: 44px; font-weight: 400; letter-spacing: 1px; color: v
 }
 .primary:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 2px 0 #a3540a; }
 
-.chars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.chars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
 
 /* 입장 화면: 왼쪽 3D 미리보기, 오른쪽 입력 */
 .join-body { display: grid; grid-template-columns: 260px 1fr; gap: 20px; align-items: start; text-align: left; }
@@ -55,9 +55,9 @@ h1 { margin: 0; font-size: 44px; font-weight: 400; letter-spacing: 1px; color: v
 
 /* 캐릭터 카드: 썸네일 + 이름 */
 .chars.cards button { flex-direction: column; gap: 2px; padding: 6px 4px 8px; position: relative; }
-.chars.cards img { width: 72px; height: 72px; display: block; }
-.chars.cards.small img { width: 52px; height: 52px; }
-.chars.cards .thumb-fallback { width: 72px; height: 72px; display: grid; place-items: center; }
+.chars.cards img { width: 64px; height: 64px; display: block; }
+.chars.cards.small img { width: 46px; height: 46px; }
+.chars.cards .thumb-fallback { width: 64px; height: 64px; display: grid; place-items: center; }
 .chars.cards.small .thumb-fallback { width: 52px; height: 52px; }
 .chars.cards button:disabled { opacity: 0.35; }
 .chars.cards .taken { position: absolute; top: 4px; right: 4px; font-size: 11px; padding: 1px 6px; border-radius: 999px; background: rgba(0, 0, 0, 0.55); }
